@@ -58,6 +58,7 @@ try:
     from backend.video_engine import (
         TEMP_DIR,
         EXPORTS_DIR,
+        FONTS_DIR,
         COOKIES_PATH,
         ROOT_COOKIES_PATH,
         get_effective_cookies_path,
@@ -82,6 +83,7 @@ except ImportError:
     from video_engine import (
         TEMP_DIR,
         EXPORTS_DIR,
+        FONTS_DIR,
         COOKIES_PATH,
         ROOT_COOKIES_PATH,
         get_effective_cookies_path,

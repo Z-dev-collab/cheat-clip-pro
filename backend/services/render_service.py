@@ -105,16 +105,19 @@ async def render_single_batch_clip(
                     render_title_overlay_png,
                     title_text=display_title,
                     output_png_path=title_png_path,
-                    font_name=settings.caption_font or "Montserrat",
+                    font_name=settings.title_font or settings.caption_font or "Outfit",
                     target_aspect_ratio=settings.aspect_ratio or "9:16",
-                    font_size_preset=settings.font_size or "medium",
-                    text_case=settings.text_case or "uppercase",
+                    font_size_preset=settings.title_font_size or settings.font_size or "medium",
+                    text_case=settings.title_text_case or settings.text_case or "uppercase",
                     title_position=settings.title_position or "auto",
                     title_y_percent=settings.title_y_percent,
                     canvas_w=canvas_w,
                     canvas_h=canvas_h,
                     title_font_size_preset=settings.title_font_size or settings.font_size or "medium",
-                    streamer_preset=settings.streamer_preset or "none"
+                    streamer_preset=settings.streamer_preset or "none",
+                    title_font_name=settings.title_font or settings.caption_font or "Outfit",
+                    title_font_size_px=settings.title_font_size_px,
+                    title_text_case=settings.title_text_case or settings.text_case or "uppercase"
                 )
                 if rendered_overlay and os.path.exists(rendered_overlay):
                     title_overlay_path = rendered_overlay
@@ -140,7 +143,7 @@ async def render_single_batch_clip(
                 generate_ass_file,
                 words=words,
                 style_preset=settings.caption_style,
-                font_name=settings.caption_font,
+                font_name=settings.caption_font or "Outfit",
                 output_ass_path=ass_path,
                 target_aspect_ratio=settings.aspect_ratio,
                 font_size_preset=settings.font_size,
@@ -155,7 +158,11 @@ async def render_single_batch_clip(
                 subtitle_center_y_percent=settings.subtitle_center_y_percent if settings.subtitle_center_y_percent is not None else 50.0,
                 skip_title=skip_ass_title,
                 title_font_size_preset=settings.title_font_size or settings.font_size or "medium",
-                streamer_preset=settings.streamer_preset or "none"
+                streamer_preset=settings.streamer_preset or "none",
+                title_font_name=settings.title_font or settings.caption_font or "Outfit",
+                font_size_px=settings.font_size_px,
+                title_font_size_px=settings.title_font_size_px,
+                title_text_case=settings.title_text_case or settings.text_case or "uppercase"
             )
 
         # 3. Render Final Vertical MP4
@@ -215,7 +222,10 @@ async def render_single_batch_clip(
         if "moov atom not found" in err_msg.lower():
             err_msg = "Download interrupted by internet lag ('moov atom not found'). Click Retry to re-download."
         elif "timed out" in err_msg.lower() or "timeout" in err_msg.lower():
-            err_msg = "Download timed out due to slow/laggy internet connection. Click Retry to try again."
+            if clip_status.get("status") == "rendering":
+                err_msg = "Video rendering timed out. Try switching to 'Universal CPU (libx264)' in Studio Settings or retry."
+            else:
+                err_msg = "Video download timed out due to slow/laggy internet connection. Click Retry to try again."
         clip_status["error_message"] = err_msg
         clip_status["error"] = err_msg
 

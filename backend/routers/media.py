@@ -13,6 +13,7 @@ from backend.config import (
     EXPORTS_DIR,
     TEMP_DIR,
     UPLOADS_DIR,
+    FONTS_DIR,
     detect_speaker_face_box,
     extract_clip_frame,
     get_video_file_metadata,
@@ -27,13 +28,14 @@ MAX_VIDEO_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024   # 4 GB
 MAX_AUDIO_UPLOAD_BYTES = 100 * 1024 * 1024        # 100 MB
 MAX_SFX_UPLOAD_BYTES = 50 * 1024 * 1024           # 50 MB
 MAX_IMAGE_UPLOAD_BYTES = 25 * 1024 * 1024         # 25 MB
+MAX_FONT_UPLOAD_BYTES = 50 * 1024 * 1024          # 50 MB
 
 
 def _is_safe_path(target_path: Path) -> bool:
     """Ensures the resolved file path is strictly located within allowed media directories."""
     try:
         resolved = target_path.resolve()
-        allowed_roots = [UPLOADS_DIR.resolve(), TEMP_DIR.resolve(), EXPORTS_DIR.resolve()]
+        allowed_roots = [UPLOADS_DIR.resolve(), TEMP_DIR.resolve(), EXPORTS_DIR.resolve(), FONTS_DIR.resolve()]
         return any(resolved == root or resolved.is_relative_to(root) for root in allowed_roots)
     except Exception:
         return False
@@ -422,3 +424,127 @@ async def detect_face(
         logger.warning(f"Face detection API error: {e}")
 
     return default_res
+
+
+@router.post("/api/upload-font")
+async def upload_font(file: UploadFile = File(...)):
+    """
+    Handles custom font file uploads (.ttf, .otf, .woff, .woff2).
+    Saves to fonts directory so preview and libass / ffmpeg can immediately render with it.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+    
+    ext = os.path.splitext(file.filename)[1].lower()
+    allowed = [".ttf", ".otf", ".woff", ".woff2"]
+    if ext not in allowed:
+        raise HTTPException(status_code=400, detail=f"Unsupported font format. Allowed: {', '.join(allowed)}")
+
+    clean_stem = re.sub(r'[^a-zA-Z0-9_\-\s]', '_', os.path.splitext(file.filename)[0]).strip()
+    if not clean_stem:
+        clean_stem = f"CustomFont_{uuid.uuid4().hex[:6]}"
+    
+    saved_filename = f"{clean_stem}{ext}"
+    save_path = FONTS_DIR / saved_filename
+
+    try:
+        bytes_written = await _save_uploaded_file_chunked(file, save_path, MAX_FONT_UPLOAD_BYTES)
+        
+        # Extract font family name using PIL ImageFont
+        font_family = clean_stem
+        try:
+            from PIL import ImageFont
+            loaded_f = ImageFont.truetype(str(save_path), 24)
+            names = loaded_f.getname()
+            if names and names[0]:
+                font_family = str(names[0]).strip()
+        except Exception as font_err:
+            logger.info(f"Could not read font table name ({font_err}); using stem '{clean_stem}'")
+
+        logger.info(f"Uploaded custom font: '{file.filename}' -> saved as '{saved_filename}' (Family: '{font_family}', {bytes_written} bytes)")
+
+        return {
+            "success": True,
+            "font_name": font_family,
+            "filename": saved_filename,
+            "url": f"/api/font-file/{saved_filename}",
+            "size_bytes": bytes_written
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to upload font: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save custom font: {str(e)}")
+
+
+@router.get("/api/fonts")
+def list_available_fonts():
+    """
+    Returns the complete list of built-in and uploaded custom fonts.
+    """
+    default_builtin = [
+        "Outfit",
+        "Montserrat",
+        "Inter",
+        "Impact",
+        "Bebas Neue",
+        "Anton",
+        "Poppins",
+        "Arial Black",
+    ]
+    fonts_map = {}
+    for name in default_builtin:
+        fonts_map[name.lower()] = {
+            "name": name,
+            "is_custom": False,
+            "filename": None,
+            "url": None
+        }
+
+    # Discover fonts on disk
+    if FONTS_DIR.exists():
+        for f in FONTS_DIR.iterdir():
+            if not f.is_file():
+                continue
+            ext = f.suffix.lower()
+            if ext not in [".ttf", ".otf", ".woff", ".woff2"]:
+                continue
+            # Skip emoji helper fonts
+            if f.name.lower() in ["seguiemj.ttf", "notocoloremoji.ttf"]:
+                continue
+
+            font_family = f.stem
+            try:
+                from PIL import ImageFont
+                loaded = ImageFont.truetype(str(f), 24)
+                names = loaded.getname()
+                if names and names[0]:
+                    font_family = str(names[0]).strip()
+            except Exception:
+                pass
+
+            key = font_family.lower()
+            is_builtin = key in fonts_map and not fonts_map[key]["is_custom"]
+            fonts_map[key] = {
+                "name": font_family,
+                "is_custom": not is_builtin,
+                "filename": f.name,
+                "url": f"/api/font-file/{f.name}"
+            }
+
+    return {"success": True, "fonts": list(fonts_map.values())}
+
+
+@router.get("/api/font-file/{file_name}")
+def get_font_file(file_name: str):
+    """
+    Serves font binary with correct MIME type for frontend FontFace and CSS loading.
+    """
+    clean_name = os.path.basename(file_name)
+    file_path = FONTS_DIR / clean_name
+    if not file_path.exists() or not _is_safe_path(file_path):
+        raise HTTPException(status_code=404, detail="Font file not found")
+
+    ext = os.path.splitext(clean_name)[1].lower()
+    media_type = "font/woff2" if ext == ".woff2" else "font/woff" if ext == ".woff" else "font/otf" if ext == ".otf" else "font/ttf"
+    return FileResponse(file_path, media_type=media_type, filename=clean_name)

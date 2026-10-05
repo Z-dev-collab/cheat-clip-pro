@@ -56,15 +56,23 @@ export type CaptionFont =
   | 'Bebas Neue' 
   | 'Anton' 
   | 'Poppins' 
-  | 'Arial Black';
+  | 'Arial Black'
+  | (string & {});
 export type TitlePosition = 'auto' | 'safe_zone' | 'middle' | 'none';
 export type TitleDurationOption = 'entire' | '5s' | '10s';
 export type SubtitlePositionMode = 'bottom' | 'center';
 export type StreamerPreset = 'none' | 'split_top_cam' | 'pip_corner';
 export type FacecamPosition = 'auto' | 'bottom_right' | 'top_right' | 'bottom_left' | 'top_left' | 'center' | 'left' | 'right';
-export type FontSizeOption = 'small' | 'medium' | 'big';
+export type FontSizeOption = 'small' | 'medium' | 'big' | 'custom';
 export type TextCaseOption = 'uppercase' | 'capitalize' | 'lowercase';
 export type HardwareAccelOption = 'auto' | 'nvenc' | 'amf' | 'qsv' | 'cpu';
+
+export interface FontItem {
+  name: string;
+  is_custom: boolean;
+  filename?: string | null;
+  url?: string | null;
+}
 
 export interface HardwareAccelInfo {
   status: string;
@@ -98,11 +106,15 @@ export interface RenderSettings {
   fileNameSuffix?: string;
   titlePosition: TitlePosition;
   titleDuration?: TitleDurationOption;
+  titleFont?: CaptionFont;
   titleFontSize?: FontSizeOption;
+  titleFontSizePx?: number;
+  titleTextCase?: TextCaseOption;
   subtitlesEnabled?: boolean;
   captionStyle: CaptionStyle;
   captionFont: CaptionFont;
   fontSize: FontSizeOption;
+  fontSizePx?: number;
   textCase: TextCaseOption;
   titleYPercent?: number;
   subtitleYPercent?: number;

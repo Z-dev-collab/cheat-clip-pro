@@ -18,6 +18,7 @@ import type {
   BatchRenderProgress,
   HardwareAccelOption,
   HardwareAccelInfo,
+  FontItem,
 } from '../types';
 
 interface ClipStudioSectionProps {
@@ -43,6 +44,9 @@ function getFriendlyErrorMessage(rawMsg: string): string {
   }
   if (lower.includes("bot verification") || lower.includes("sign in") || lower.includes("confirm you're not a bot")) {
     return 'YouTube requires cookies verification. Click the 🍪 Cookies Manager button in the top navbar to save your YouTube cookies.';
+  }
+  if (lower.includes("rendering timed out") || (lower.includes("timed out") && lower.includes("rendering"))) {
+    return 'Video rendering timed out due to duration/complexity. Click "🔄 Retry" or switch to Universal CPU encoder in Studio Settings.';
   }
   if (lower.includes("timed out") || lower.includes("timeout")) {
     return 'Video download timed out due to slow/laggy internet connection. Click "🔄 Retry" to try downloading again.';
@@ -199,9 +203,30 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>('viral_pop');
   const [lastActiveCaptionStyle, setLastActiveCaptionStyle] = useState<CaptionStyle>('viral_pop');
   const [captionFont, setCaptionFont] = useState<CaptionFont>('Outfit');
+  const [titleFont, setTitleFont] = useState<CaptionFont>('Outfit');
   const [fontSize, setFontSize] = useState<FontSizeOption>('medium');
+  const [fontSizePx, setFontSizePx] = useState<number>(75);
   const [titleFontSize, setTitleFontSize] = useState<FontSizeOption>('medium');
+  const [titleFontSizePx, setTitleFontSizePx] = useState<number>(75);
   const [textCase, setTextCase] = useState<TextCaseOption>('uppercase');
+  const [titleTextCase, setTitleTextCase] = useState<TextCaseOption>('uppercase');
+
+  // Custom Font Library State
+  const [availableFonts, setAvailableFonts] = useState<FontItem[]>([
+    { name: 'Outfit', is_custom: false },
+    { name: 'Montserrat', is_custom: false },
+    { name: 'Inter', is_custom: false },
+    { name: 'Impact', is_custom: false },
+    { name: 'Bebas Neue', is_custom: false },
+    { name: 'Anton', is_custom: false },
+    { name: 'Poppins', is_custom: false },
+    { name: 'Arial Black', is_custom: false },
+  ]);
+  const [isUploadingFont, setIsUploadingFont] = useState<boolean>(false);
+  const [isTitleFontDragging, setIsTitleFontDragging] = useState<boolean>(false);
+  const [isSubFontDragging, setIsSubFontDragging] = useState<boolean>(false);
+  const titleFontInputRef = useRef<HTMLInputElement | null>(null);
+  const subtitleFontInputRef = useRef<HTMLInputElement | null>(null);
   const [fileNamePrefix, setFileNamePrefix] = useState<string>('');
   const [fileNameSuffix, setFileNameSuffix] = useState<string>('');
 
@@ -276,6 +301,69 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     };
     fetchHardwareSupport();
   }, []);
+
+  const loadCustomFontFace = (name: string, url: string) => {
+    try {
+      const font = new FontFace(name, `url(${url})`);
+      font.load().then(loaded => {
+        document.fonts.add(loaded);
+      }).catch(err => console.warn(`Font '${name}' load error:`, err));
+    } catch (e) {
+      console.warn('FontFace API error:', e);
+    }
+  };
+
+  useEffect(() => {
+    const fetchAvailableFonts = async () => {
+      try {
+        const res = await resilientFetch('/api/fonts', { maxRetries: 3, retryDelay: 1000, silent: true });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && Array.isArray(data.fonts)) {
+            setAvailableFonts(data.fonts);
+            data.fonts.forEach((f: FontItem) => {
+              if (f.url) loadCustomFontFace(f.name, f.url);
+            });
+          }
+        }
+      } catch {
+        // Fallback to built-in fonts
+      }
+    };
+    fetchAvailableFonts();
+  }, []);
+
+  const handleUploadFont = async (file: File, target: 'title' | 'subtitle') => {
+    if (!file) return;
+    setIsUploadingFont(true);
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      const res = await resilientFetch('/api/upload-font', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      if (data.success && data.font_name) {
+        if (data.url) loadCustomFontFace(data.font_name, data.url);
+        setAvailableFonts(prev => {
+          if (!prev.some(f => f.name.toLowerCase() === data.font_name.toLowerCase())) {
+            return [...prev, { name: data.font_name, is_custom: true, filename: data.filename, url: data.url }];
+          }
+          return prev;
+        });
+        if (target === 'title') {
+          setTitleFont(data.font_name);
+        } else {
+          setCaptionFont(data.font_name);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to upload custom font:', err);
+    } finally {
+      setIsUploadingFont(false);
+    }
+  };
 
   // Playable video player state
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
@@ -1121,8 +1209,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
   // Preview framing dimensions (adapts dynamically for True Landscape vs Vertical)
   const isLandscape = aspectRatio === '16:9_landscape';
-  const phoneWidth = isLandscape ? 480 : 320;
-  const phoneHeight = isLandscape ? 270 : 569;
+  const phoneWidth = 320;
+  const phoneHeight = isLandscape ? 180 : 569;
 
   const currentClipKey = currentPreviewClip ? `${currentPreviewClip.start_time}_${currentPreviewClip.end_time}` : '';
   const currentCustomTitle = currentClipKey ? customClipTitles[currentClipKey] : undefined;
@@ -1140,7 +1228,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
   const { formatted: formattedTitle, lineCount: titleLineCount } = formatTitleSmart(
     activeTitle,
-    textCase,
+    titleTextCase,
     titleFontSize
   );
 
@@ -1207,11 +1295,15 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       fileNameSuffix,
       titlePosition,
       titleDuration,
+      titleFont,
       titleFontSize,
+      titleFontSizePx,
+      titleTextCase,
       subtitlesEnabled: captionStyle !== 'none',
       captionStyle,
       captionFont,
       fontSize,
+      fontSizePx,
       textCase,
       titleYPercent: safeTitleY,
       subtitleYPercent: safeSubtitleY,
@@ -1659,30 +1751,188 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   </div>
                 </div>
 
-                {/* Title Text Size Option */}
+                {/* Title Font Family with Dedicated Dropzone */}
+                <div className="studio-font-section">
+                  <div className="font-section-header">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                      <span className="sub-toggle-label" style={{ margin: 0, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                        🔤 {t.studio.titleFontFamily || "Title Font Family"}
+                      </span>
+                      <span className="badge" style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', opacity: 0.85 }}>
+                        {titleFont}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Title Font Pills List */}
+                  <div className="toggle-pill-group" style={{ flexWrap: 'wrap', width: '100%' }}>
+                    {availableFonts.map(font => (
+                      <button
+                        key={`title-font-${font.name}`}
+                        type="button"
+                        className={`pill-btn ${titleFont === font.name ? 'active' : ''}`}
+                        onClick={() => setTitleFont(font.name)}
+                        style={{ fontFamily: font.name, fontSize: '0.78rem' }}
+                      >
+                        {font.name}
+                        {font.is_custom && <span style={{ marginLeft: '4px', fontSize: '0.62rem', opacity: 0.85, color: '#fbbf24' }}>★</span>}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Title Font Drag & Drop Dropzone */}
+                  <div
+                    className={`font-dropzone ${isTitleFontDragging ? 'drag-over' : ''}`}
+                    onClick={() => titleFontInputRef.current?.click()}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setIsTitleFontDragging(true);
+                    }}
+                    onDragLeave={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setIsTitleFontDragging(false);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setIsTitleFontDragging(false);
+                      const file = e.dataTransfer.files?.[0];
+                      if (file) handleUploadFont(file, 'title');
+                    }}
+                    title="Drag and drop or click to upload custom font file (.ttf, .otf, .woff, .woff2)"
+                  >
+                    <input
+                      ref={titleFontInputRef}
+                      type="file"
+                      accept=".ttf,.otf,.woff,.woff2"
+                      style={{ display: 'none' }}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleUploadFont(file, 'title');
+                        e.target.value = '';
+                      }}
+                      disabled={isUploadingFont}
+                    />
+                    <span className="font-dropzone-icon">
+                      {isUploadingFont ? '⏳' : isTitleFontDragging ? '📥' : '📁'}
+                    </span>
+                    <div className="font-dropzone-text">
+                      <span className="font-dropzone-title">
+                        {isUploadingFont ? (t.studio.uploadingFont || 'Uploading font...') : (t.studio.dropFontHint || 'Upload Custom Font (.ttf, .otf, .woff, .woff2)')}
+                      </span>
+                      <span className="font-dropzone-desc">
+                        {t.studio.dropFontSub || 'Drag & drop font file here or click to browse'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Title Text Size Option with Uncapped Manual Pixel Input */}
                 <div className="studio-sub-toggle" style={{ marginTop: '0.75rem' }}>
                   <span className="sub-toggle-label">{t.studio.titleFontSize || "Title Text Size:"}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                    <div className="toggle-pill-group">
+                      <button
+                        type="button"
+                        className={`pill-btn ${titleFontSize === 'small' ? 'active' : ''}`}
+                        onClick={() => {
+                          setTitleFontSize('small');
+                          setTitleFontSizePx(50);
+                        }}
+                      >
+                        {t.studio.sizeSmall} (50px)
+                      </button>
+                      <button
+                        type="button"
+                        className={`pill-btn ${titleFontSize === 'medium' ? 'active' : ''}`}
+                        onClick={() => {
+                          setTitleFontSize('medium');
+                          setTitleFontSizePx(75);
+                        }}
+                      >
+                        {t.studio.sizeMedium} (75px)
+                      </button>
+                      <button
+                        type="button"
+                        className={`pill-btn ${titleFontSize === 'big' ? 'active' : ''}`}
+                        onClick={() => {
+                          setTitleFontSize('big');
+                          setTitleFontSizePx(100);
+                        }}
+                      >
+                        {t.studio.sizeBig} (100px)
+                      </button>
+                      <button
+                        type="button"
+                        className={`pill-btn ${titleFontSize === 'custom' ? 'active' : ''}`}
+                        onClick={() => setTitleFontSize('custom')}
+                      >
+                        {t.studio.sizeCustom || 'Custom'}
+                      </button>
+                    </div>
+                    {/* Manual Numeric PX Input (Unlimited, 1 - 1000px) */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                      <input
+                        type="number"
+                        min="1"
+                        max="1000"
+                        step="1"
+                        value={titleFontSizePx || ''}
+                        placeholder="px"
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          if (raw === '') {
+                            setTitleFontSizePx(0);
+                            setTitleFontSize('custom');
+                            return;
+                          }
+                          const num = parseInt(raw, 10);
+                          const val = isNaN(num) ? 0 : Math.max(1, Math.min(1000, num));
+                          setTitleFontSizePx(val);
+                          setTitleFontSize('custom');
+                        }}
+                        className="studio-text-input"
+                        style={{
+                          width: '72px',
+                          padding: '0.22rem 0.45rem',
+                          fontSize: '0.78rem',
+                          textAlign: 'center',
+                          borderRadius: '6px',
+                          border: titleFontSize === 'custom' ? '1px solid var(--primary, #38bdf8)' : '1px solid rgba(255,255,255,0.15)',
+                        }}
+                        title="Enter custom title font size in pixels (px, 1 - 1000)"
+                      />
+                      <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: 600 }}>px</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Title Letter Style Option */}
+                <div className="studio-sub-toggle" style={{ marginTop: '0.75rem' }}>
+                  <span className="sub-toggle-label">{t.studio.titleLetterStyle || "Title Letter Style:"}</span>
                   <div className="toggle-pill-group">
                     <button
                       type="button"
-                      className={`pill-btn ${titleFontSize === 'small' ? 'active' : ''}`}
-                      onClick={() => setTitleFontSize('small')}
+                      className={`pill-btn ${titleTextCase === 'uppercase' ? 'active' : ''}`}
+                      onClick={() => setTitleTextCase('uppercase')}
                     >
-                      {t.studio.sizeSmall}
+                      {t.studio.letterCaps}
                     </button>
                     <button
                       type="button"
-                      className={`pill-btn ${titleFontSize === 'medium' ? 'active' : ''}`}
-                      onClick={() => setTitleFontSize('medium')}
+                      className={`pill-btn ${titleTextCase === 'capitalize' ? 'active' : ''}`}
+                      onClick={() => setTitleTextCase('capitalize')}
                     >
-                      {t.studio.sizeMedium}
+                      {t.studio.letterTitle}
                     </button>
                     <button
                       type="button"
-                      className={`pill-btn ${titleFontSize === 'big' ? 'active' : ''}`}
-                      onClick={() => setTitleFontSize('big')}
+                      className={`pill-btn ${titleTextCase === 'lowercase' ? 'active' : ''}`}
+                      onClick={() => setTitleTextCase('lowercase')}
                     >
-                      {t.studio.sizeBig}
+                      {t.studio.letterLower}
                     </button>
                   </div>
                 </div>
@@ -1907,60 +2157,161 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
             {captionStyle !== 'none' && (
               <>
-                {/* Font Family */}
-                <div className="studio-sub-toggle" style={{ marginTop: '0.85rem' }}>
-                  <span className="sub-toggle-label">{t.studio.fontFamily}</span>
-                  <div className="toggle-pill-group" style={{ flexWrap: 'wrap' }}>
-                    {(
-                      [
-                        'Outfit',
-                        'Montserrat',
-                        'Inter',
-                        'Impact',
-                        'Bebas Neue',
-                        'Anton',
-                        'Poppins',
-                        'Arial Black',
-                      ] as CaptionFont[]
-                    ).map(font => (
+                {/* Subtitle Font Family with Dedicated Dropzone */}
+                <div className="studio-font-section">
+                  <div className="font-section-header">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                      <span className="sub-toggle-label" style={{ margin: 0, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                        🔤 {t.studio.fontFamily}
+                      </span>
+                      <span className="badge" style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', opacity: 0.85 }}>
+                        {captionFont}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Subtitle Font Pills List */}
+                  <div className="toggle-pill-group" style={{ flexWrap: 'wrap', width: '100%' }}>
+                    {availableFonts.map(font => (
                       <button
-                        key={font}
+                        key={`sub-font-${font.name}`}
                         type="button"
-                        className={`pill-btn ${captionFont === font ? 'active' : ''}`}
-                        onClick={() => setCaptionFont(font)}
-                        style={{ fontFamily: font, fontSize: '0.78rem' }}
+                        className={`pill-btn ${captionFont === font.name ? 'active' : ''}`}
+                        onClick={() => setCaptionFont(font.name)}
+                        style={{ fontFamily: font.name, fontSize: '0.78rem' }}
                       >
-                        {font}
+                        {font.name}
+                        {font.is_custom && <span style={{ marginLeft: '4px', fontSize: '0.62rem', opacity: 0.85, color: '#fbbf24' }}>★</span>}
                       </button>
                     ))}
                   </div>
+
+                  {/* Subtitle Font Drag & Drop Dropzone */}
+                  <div
+                    className={`font-dropzone ${isSubFontDragging ? 'drag-over' : ''}`}
+                    onClick={() => subtitleFontInputRef.current?.click()}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setIsSubFontDragging(true);
+                    }}
+                    onDragLeave={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setIsSubFontDragging(false);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setIsSubFontDragging(false);
+                      const file = e.dataTransfer.files?.[0];
+                      if (file) handleUploadFont(file, 'subtitle');
+                    }}
+                    title="Drag and drop or click to upload custom font file (.ttf, .otf, .woff, .woff2)"
+                  >
+                    <input
+                      ref={subtitleFontInputRef}
+                      type="file"
+                      accept=".ttf,.otf,.woff,.woff2"
+                      style={{ display: 'none' }}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleUploadFont(file, 'subtitle');
+                        e.target.value = '';
+                      }}
+                      disabled={isUploadingFont}
+                    />
+                    <span className="font-dropzone-icon">
+                      {isUploadingFont ? '⏳' : isSubFontDragging ? '📥' : '📁'}
+                    </span>
+                    <div className="font-dropzone-text">
+                      <span className="font-dropzone-title">
+                        {isUploadingFont ? (t.studio.uploadingFont || 'Uploading font...') : (t.studio.dropFontHint || 'Upload Custom Font (.ttf, .otf, .woff, .woff2)')}
+                      </span>
+                      <span className="font-dropzone-desc">
+                        {t.studio.dropFontSub || 'Drag & drop font file here or click to browse'}
+                      </span>
+                    </div>
+                  </div>
                 </div>
 
-                {/* Font Size Presets */}
+                {/* Subtitle Font Size Presets & Uncapped Manual PX Input */}
                 <div className="studio-sub-toggle" style={{ marginTop: '0.75rem' }}>
                   <span className="sub-toggle-label">{t.studio.fontSize}</span>
-                  <div className="toggle-pill-group">
-                    <button
-                      type="button"
-                      className={`pill-btn ${fontSize === 'small' ? 'active' : ''}`}
-                      onClick={() => setFontSize('small')}
-                    >
-                      {t.studio.sizeSmall}
-                    </button>
-                    <button
-                      type="button"
-                      className={`pill-btn ${fontSize === 'medium' ? 'active' : ''}`}
-                      onClick={() => setFontSize('medium')}
-                    >
-                      {t.studio.sizeMedium}
-                    </button>
-                    <button
-                      type="button"
-                      className={`pill-btn ${fontSize === 'big' ? 'active' : ''}`}
-                      onClick={() => setFontSize('big')}
-                    >
-                      {t.studio.sizeBig}
-                    </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                    <div className="toggle-pill-group">
+                      <button
+                        type="button"
+                        className={`pill-btn ${fontSize === 'small' ? 'active' : ''}`}
+                        onClick={() => {
+                          setFontSize('small');
+                          setFontSizePx(55);
+                        }}
+                      >
+                        {t.studio.sizeSmall} (55px)
+                      </button>
+                      <button
+                        type="button"
+                        className={`pill-btn ${fontSize === 'medium' ? 'active' : ''}`}
+                        onClick={() => {
+                          setFontSize('medium');
+                          setFontSizePx(75);
+                        }}
+                      >
+                        {t.studio.sizeMedium} (75px)
+                      </button>
+                      <button
+                        type="button"
+                        className={`pill-btn ${fontSize === 'big' ? 'active' : ''}`}
+                        onClick={() => {
+                          setFontSize('big');
+                          setFontSizePx(95);
+                        }}
+                      >
+                        {t.studio.sizeBig} (95px)
+                      </button>
+                      <button
+                        type="button"
+                        className={`pill-btn ${fontSize === 'custom' ? 'active' : ''}`}
+                        onClick={() => setFontSize('custom')}
+                      >
+                        {t.studio.sizeCustom || 'Custom'}
+                      </button>
+                    </div>
+                    {/* Manual Numeric PX Input (Unlimited, 1 - 1000px) */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                      <input
+                        type="number"
+                        min="1"
+                        max="1000"
+                        step="1"
+                        value={fontSizePx || ''}
+                        placeholder="px"
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          if (raw === '') {
+                            setFontSizePx(0);
+                            setFontSize('custom');
+                            return;
+                          }
+                          const num = parseInt(raw, 10);
+                          const val = isNaN(num) ? 0 : Math.max(1, Math.min(1000, num));
+                          setFontSizePx(val);
+                          setFontSize('custom');
+                        }}
+                        className="studio-text-input"
+                        style={{
+                          width: '72px',
+                          padding: '0.22rem 0.45rem',
+                          fontSize: '0.78rem',
+                          textAlign: 'center',
+                          borderRadius: '6px',
+                          border: fontSize === 'custom' ? '1px solid var(--primary, #38bdf8)' : '1px solid rgba(255,255,255,0.15)',
+                        }}
+                        title="Enter custom subtitle font size in pixels (px, 1 - 1000)"
+                      />
+                      <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: 600 }}>px</span>
+                    </div>
                   </div>
                 </div>
 
@@ -3304,21 +3655,12 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     <span
                       className="wireframe-title-text"
                       style={{
-                        fontFamily: captionFont,
+                        fontFamily: titleFont,
                         fontSize: (() => {
-                          const effectiveSize = titleFontSize || fontSize;
-                          if (isLandscape) {
-                            if (effectiveSize === 'small') return titleLineCount >= 3 ? '12px' : '14px';
-                            if (effectiveSize === 'big') return titleLineCount >= 3 ? '19px' : '22px';
-                            return titleLineCount >= 3 ? '15px' : '17.5px';
-                          }
-                          if (effectiveSize === 'small') {
-                            return titleLineCount >= 3 ? '14px' : '16.5px';
-                          }
-                          if (effectiveSize === 'big') {
-                            return titleLineCount >= 3 ? '22.5px' : '26px';
-                          }
-                          return titleLineCount >= 3 ? '18px' : '21px';
+                          const scale = isLandscape ? (320 / 1920) : (320 / 1080);
+                          const px = Math.round(titleFontSizePx * scale);
+                          const minPx = 4;
+                          return `${Math.max(minPx, px)}px`;
                         })(),
                         lineHeight: titleLineCount >= 3 ? 1.10 : 1.08,
                         letterSpacing: '0.02em',
@@ -3367,9 +3709,12 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                       className="wireframe-caption-text"
                       style={{
                         fontFamily: captionFont,
-                        fontSize: isLandscape
-                          ? (fontSize === 'small' ? '13px' : fontSize === 'big' ? '20px' : '16px')
-                          : (fontSize === 'small' ? '17px' : fontSize === 'big' ? '25px' : '20.5px'),
+                        fontSize: (() => {
+                          const scale = isLandscape ? (320 / 1920) : (320 / 1080);
+                          const px = Math.round(fontSizePx * scale);
+                          const minPx = 4;
+                          return `${Math.max(minPx, px)}px`;
+                        })(),
                         fontWeight: 800,
                         letterSpacing: '0.03em',
                         textAlign: 'center',
@@ -3595,8 +3940,14 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 </div>
                 <div className="history-info-item">
                   <span className="info-key">{t.studio.specCaption}</span>
-                  <span className="info-val">{captionStyle} · {captionFont}</span>
+                  <span className="info-val">{captionStyle} · {captionFont} ({fontSizePx}px)</span>
                 </div>
+                {titlePosition !== 'none' && (
+                  <div className="history-info-item">
+                    <span className="info-key">Title Font:</span>
+                    <span className="info-val">{titleFont} ({titleFontSizePx}px)</span>
+                  </div>
+                )}
                 <div className="history-info-item">
                   <span className="info-key">{t.studio.specQueue}</span>
                   <span className="info-val">{t.studio.specQueueVal(selectedClips.length, allClips.length)}</span>

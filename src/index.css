@@ -1440,11 +1440,65 @@ label[for="manual-subtitle-file"]:hover {
   border-color: #fff;
 }
 
-.aspect-icon-box.ratio-916 { width: 18px; height: 32px; }
-.aspect-icon-box.ratio-11  { width: 24px; height: 24px; }
-.aspect-icon-box.ratio-43  { width: 28px; height: 21px; }
-.aspect-icon-box.ratio-169 { width: 22px; height: 30px; border-top: 6px solid rgba(255, 255, 255, 0.35); border-bottom: 6px solid rgba(255, 255, 255, 0.35); }
-.aspect-icon-box.ratio-169landscape { width: 34px; height: 19px; }
+.aspect-icon-box.ratio-916 {
+  width: 18px;
+  height: 32px;
+}
+
+.aspect-icon-box.ratio-11,
+.aspect-icon-box.ratio-43,
+.aspect-icon-box.ratio-169 {
+  width: 18px;
+  height: 32px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.aspect-icon-box.ratio-11::after,
+.aspect-icon-box.ratio-43::after,
+.aspect-icon-box.ratio-169::after {
+  content: '';
+  background: rgba(255, 255, 255, 0.55);
+  border-radius: 1.5px;
+  transition: background 0.2s ease;
+}
+
+.aspect-card-btn:hover .aspect-icon-box.ratio-11::after,
+.aspect-card-btn:hover .aspect-icon-box.ratio-43::after,
+.aspect-card-btn:hover .aspect-icon-box.ratio-169::after {
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.aspect-card-btn.active .aspect-icon-box.ratio-11::after,
+.aspect-card-btn.active .aspect-icon-box.ratio-43::after,
+.aspect-card-btn.active .aspect-icon-box.ratio-169::after {
+  background: #ffffff;
+}
+
+/* 1:1 Square (14px x 14px) inside 9:16 vertical canvas */
+.aspect-icon-box.ratio-11::after {
+  width: 14px;
+  height: 14px;
+}
+
+/* 4:3 Standard (14px x 10.5px) inside 9:16 vertical canvas */
+.aspect-icon-box.ratio-43::after {
+  width: 14px;
+  height: 10.5px;
+}
+
+/* 16:9 Letterbox (14px x 8px) inside 9:16 vertical canvas */
+.aspect-icon-box.ratio-169::after {
+  width: 14px;
+  height: 8px;
+}
+
+.aspect-icon-box.ratio-169landscape {
+  width: 34px;
+  height: 19px;
+}
 
 .aspect-name {
   font-size: 0.8rem;
@@ -1501,6 +1555,80 @@ label[for="manual-subtitle-file"]:hover {
   color: #fff;
   font-weight: 600;
   box-shadow: 0 0 10px rgba(255, 94, 58, 0.3);
+}
+
+/* Studio Dedicated Font Section & Drag-and-Drop Dropzone */
+.studio-font-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  width: 100%;
+}
+
+.font-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.font-dropzone {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.65rem 0.95rem;
+  background: rgba(56, 189, 248, 0.03);
+  border: 1.5px dashed rgba(56, 189, 248, 0.3);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  user-select: none;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 0.2rem;
+}
+
+.font-dropzone:hover {
+  background: rgba(56, 189, 248, 0.08);
+  border-color: rgba(56, 189, 248, 0.65);
+  box-shadow: 0 0 14px rgba(56, 189, 248, 0.15);
+}
+
+.font-dropzone.drag-over {
+  background: rgba(56, 189, 248, 0.18) !important;
+  border-color: #38bdf8 !important;
+  border-style: solid !important;
+  box-shadow: 0 0 20px rgba(56, 189, 248, 0.4) !important;
+  transform: scale(1.008);
+}
+
+.font-dropzone-icon {
+  font-size: 1.4rem;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.font-dropzone-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  text-align: left;
+}
+
+.font-dropzone-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #e0f2fe;
+}
+
+.font-dropzone-desc {
+  font-size: 0.70rem;
+  color: rgba(224, 242, 254, 0.7);
 }
 
 /* Streamer Presets */
@@ -1872,13 +2000,13 @@ label[for="manual-subtitle-file"]:hover {
 }
 
 .phone-wireframe-container.is-landscape {
-  width: 480px;
-  height: 270px;
-  min-width: 480px;
-  max-width: 480px;
-  min-height: 270px;
-  max-height: 270px;
-  border-radius: 16px;
+  width: 320px;
+  height: 180px;
+  min-width: 320px;
+  max-width: 320px;
+  min-height: 180px;
+  max-height: 180px;
+  border-radius: 12px;
 }
 
 .wireframe-bg {
@@ -2268,8 +2396,8 @@ label[for="manual-subtitle-file"]:hover {
 }
 
 .wireframe-caption-overlay.mode-center {
-  bottom: auto;
-  transform: translateY(-50%);
+  bottom: auto !important;
+  transform: translateY(-50%) !important;
 }
 
 .wireframe-caption-text {

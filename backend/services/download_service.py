@@ -151,7 +151,8 @@ async def run_raw_clip_download_job(
                     "-movflags", "+faststart",
                     str(out_path)
                 ]
-                await asyncio.to_thread(subprocess.run, trim_cmd, check=True, timeout=90)
+                trim_timeout = max(180, int(duration_sec * 4) + 60)
+                await asyncio.to_thread(subprocess.run, trim_cmd, check=True, timeout=trim_timeout)
                 if out_path.exists() and out_path.stat().st_size > 1000:
                     success = True
             except Exception as trim_err:
@@ -171,7 +172,7 @@ async def run_raw_clip_download_job(
                         "-movflags", "+faststart",
                         str(out_path)
                     ]
-                    await asyncio.to_thread(subprocess.run, cpu_trim_cmd, check=True, timeout=90)
+                    await asyncio.to_thread(subprocess.run, cpu_trim_cmd, check=True, timeout=trim_timeout)
                     if out_path.exists() and out_path.stat().st_size > 1000:
                         success = True
                 except Exception as cpu_err:

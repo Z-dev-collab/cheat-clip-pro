@@ -573,8 +573,11 @@ def download_clip_segment(
                         local_source = f
                         break
 
+    clip_duration = max(1.0, end_time - start_time)
+
     if local_source and local_source.exists():
         logger.info(f"Slicing local/gdrive video: {local_source} [{start_time:.2f}s -> {end_time:.2f}s] to {output_path}")
+        slice_timeout = max(300, min(1200, int(clip_duration * 6) + 90))
         slice_cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-ss", str(start_time),
@@ -586,7 +589,7 @@ def download_clip_segment(
             "-movflags", "+faststart",
             str(output_path)
         ]
-        res = subprocess.run(slice_cmd, capture_output=True, text=True, timeout=90)
+        res = subprocess.run(slice_cmd, capture_output=True, text=True, timeout=slice_timeout)
         if output_path.exists() and is_valid_mp4(output_path):
             return str(output_path)
         if output_path.exists():
@@ -605,13 +608,12 @@ def download_clip_segment(
     if not clean_url.startswith("http"):
         clean_url = f"https://www.youtube.com/watch?v={clean_url}"
 
-    clip_duration = max(1.0, end_time - start_time)
     t_start_fmt = format_section_time(start_time)
     t_end_fmt = format_section_time(end_time)
 
-    # Dynamic timeout: Minimum 60s, plus 3s per second of clip duration (max 180s).
-    # Allows fast fallback instead of stalling for 5+ minutes when user internet lags.
-    timeout_sec = min(180, max(60, int(clip_duration * 3) + 40))
+    # Dynamic timeout: Base 300s, plus 5s per second of clip duration (max 1200s / 20 min).
+    # Ensures clips > 1 minute (e.g. 70s, 90s, 120s, 180s) have ample time to download and merge without timing out.
+    timeout_sec = max(300, min(1200, int(clip_duration * 5) + 90))
 
     has_cookies = get_effective_cookies_path() is not None
     # If cookies are present, try with cookies first; if rejected by YouTube (or any reload/bot error), try guest mode.
@@ -689,7 +691,7 @@ def download_clip_segment(
                 video_stream = urls[0]
                 audio_stream = urls[1] if len(urls) > 1 else urls[0]
 
-                trim_timeout = min(150, max(60, int(clip_duration * 2.5) + 30))
+                trim_timeout = max(240, min(900, int(clip_duration * 4.5) + 60))
                 trim_cmd = [
                     "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                     "-reconnect", "1",
@@ -751,7 +753,7 @@ def download_clip_segment(
                 "--no-warnings",
                 clean_url
             ]
-            timeout_720p = min(120, max(50, int(clip_duration * 2) + 30))
+            timeout_720p = max(200, min(600, int(clip_duration * 4) + 60))
             res_720p = subprocess.run(cmd_720p, capture_output=True, text=True, timeout=timeout_720p)
             if res_720p.returncode == 0 and is_valid_mp4(output_path):
                 logger.info(f"Successfully downloaded 720p fallback section ({mode_label}): {output_path} ({output_path.stat().st_size} bytes)")
@@ -794,7 +796,7 @@ def download_clip_segment(
                 "--no-warnings",
                 clean_url
             ]
-            timeout_480p = min(90, max(40, int(clip_duration * 2) + 20))
+            timeout_480p = max(150, min(450, int(clip_duration * 3) + 45))
             res_480p = subprocess.run(cmd_480p, capture_output=True, text=True, timeout=timeout_480p)
             if res_480p.returncode == 0 and is_valid_mp4(output_path):
                 logger.info(f"Successfully downloaded 480p fallback section ({mode_label}): {output_path} ({output_path.stat().st_size} bytes)")
@@ -1222,7 +1224,10 @@ def render_title_overlay_png(
     canvas_w: int = 1080,
     canvas_h: int = 1920,
     title_font_size_preset: Optional[str] = None,
-    streamer_preset: Optional[str] = "none"
+    streamer_preset: Optional[str] = "none",
+    title_font_name: Optional[str] = None,
+    title_font_size_px: Optional[int] = None,
+    title_text_case: Optional[str] = None
 ) -> Optional[str]:
     """
     Renders the title with full-color emojis and bold styled typography into a transparent
@@ -1231,6 +1236,8 @@ def render_title_overlay_png(
     if not title_text or title_position == "none":
         return None
 
+    effective_title_font = title_font_name or font_name or "Montserrat"
+    effective_title_case = title_text_case or text_case or "uppercase"
     effective_title_preset = (title_font_size_preset or font_size_preset or "medium").lower()
 
     if effective_title_preset == "small":
@@ -1242,15 +1249,17 @@ def render_title_overlay_png(
 
     # Format Title & Determine Line Count
     formatted_title, title_line_count = wrap_title_smart(
-        apply_text_case(title_text, text_case),
+        apply_text_case(title_text, effective_title_case),
         max_single_len=max_wrap_len
     )
 
     if not formatted_title:
         return None
 
-    # Distinct, calibrated title font sizes based on preset
-    if effective_title_preset == "small":
+    # Distinct, calibrated title font sizes based on preset or explicit px
+    if title_font_size_px and title_font_size_px > 0:
+        title_font_size = int(title_font_size_px)
+    elif effective_title_preset == "small":
         title_font_size = 58 if title_line_count >= 3 else 68
     elif effective_title_preset == "big":
         title_font_size = 106 if title_line_count >= 3 else 124
@@ -1259,7 +1268,7 @@ def render_title_overlay_png(
 
     # Create dummy draw to measure line widths and prevent edge overflow
     temp_draw = ImageDraw.Draw(Image.new("RGBA", (canvas_w, canvas_h)))
-    text_font = get_font(font_name, title_font_size)
+    text_font = get_font(effective_title_font, title_font_size)
     emoji_font = get_emoji_font(int(title_font_size * 0.90))
 
     lines = [l.strip() for l in formatted_title.split("\\N") if l.strip()]
@@ -1429,7 +1438,11 @@ def generate_ass_file(
     subtitle_center_y_percent: float = 50.0,
     skip_title: bool = False,
     title_font_size_preset: Optional[str] = None,
-    streamer_preset: Optional[str] = "none"
+    streamer_preset: Optional[str] = "none",
+    title_font_name: Optional[str] = None,
+    font_size_px: Optional[int] = None,
+    title_font_size_px: Optional[int] = None,
+    title_text_case: Optional[str] = None
 ) -> str:
     """
     Generates an Advanced SubStation Alpha (.ass) subtitle and title file with karaoke / word-level animation.
@@ -1439,6 +1452,7 @@ def generate_ass_file(
     Supports subtitle_position_mode ('bottom' | 'center') with custom center Y position.
     """
     effective_title_preset = (title_font_size_preset or font_size_preset or "medium").lower()
+    effective_title_case = title_text_case or text_case or "uppercase"
 
     if effective_title_preset == "small":
         max_wrap_len = 24
@@ -1449,7 +1463,7 @@ def generate_ass_file(
 
     # 1. Format Title & Determine Line Count
     if title_text and title_position != "none":
-        sanitized_title = escape_ass_text(apply_text_case(title_text, text_case))
+        sanitized_title = escape_ass_text(apply_text_case(title_text, effective_title_case))
         formatted_title, title_line_count = wrap_title_smart(
             sanitized_title,
             max_single_len=max_wrap_len
@@ -1491,6 +1505,11 @@ def generate_ass_file(
             title_font_size = 106 if title_line_count >= 3 else 124
         else:  # medium
             title_font_size = 82 if title_line_count >= 3 else 94
+
+    if font_size_px and int(font_size_px) > 0:
+        sub_font_size = int(font_size_px)
+    if title_font_size_px and int(title_font_size_px) > 0:
+        title_font_size = int(title_font_size_px)
 
     # 3. Content boundaries for aspect ratios
     if is_landscape:
@@ -1641,7 +1660,7 @@ Collisions: Reverse
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: TitleStyle,{font_name},{title_font_size},&H00FFFFFF,&H000000FF,&H00000000,{title_box_back},-1,0,0,0,100,100,0,0,{title_border_style},4.4,2.0,8,40,40,0,1
+Style: TitleStyle,{title_font_name or font_name},{title_font_size},&H00FFFFFF,&H000000FF,&H00000000,{title_box_back},-1,0,0,0,100,100,0,0,{title_border_style},4.4,2.0,8,40,40,0,1
 Style: SubStyle,{font_name},{sub_font_size},{primary_color},&H000000FF,{outline_color},{back_color},-1,0,0,0,100,100,0,0,1,{outline_w},{shadow_w},2,40,40,0,1
 
 [Events]
@@ -2264,7 +2283,7 @@ def build_ffmpeg_filtergraph(
             )
             if background_style == "blurred":
                 filters.append(
-                    f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                    f"[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[bg_blurred][both_split]overlay=0:352[layout_base]"
                 )
             else:
@@ -2284,7 +2303,7 @@ def build_ffmpeg_filtergraph(
             )
             if background_style == "blurred":
                 filters.append(
-                    f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                    f"[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[bg_blurred][both_split]overlay=60:0[layout_base]"
                 )
             else:
@@ -2304,7 +2323,7 @@ def build_ffmpeg_filtergraph(
             )
             if background_style == "blurred":
                 filters.append(
-                    f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                    f"[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[bg_blurred][both_split]overlay=0:150[layout_base]"
                 )
             else:
@@ -2345,7 +2364,7 @@ def build_ffmpeg_filtergraph(
             if background_style == "blurred":
                 filters.append(
                     f"[0:v]split=3[bg_raw][main_raw][pip_raw];"
-                    f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                    f"[bg_raw]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[main_raw]{crop_main}[fg_square];"
                     f"[bg_blurred][fg_square]overlay=0:420[main_base];"
                     f"{pip_crop}"
@@ -2365,7 +2384,7 @@ def build_ffmpeg_filtergraph(
             if background_style == "blurred":
                 filters.append(
                     f"[0:v]split=3[bg_raw][main_raw][pip_raw];"
-                    f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                    f"[bg_raw]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[main_raw]{crop_main}[fg_43];"
                     f"[bg_blurred][fg_43]overlay=0:555[main_base];"
                     f"{pip_crop}"
@@ -2395,7 +2414,7 @@ def build_ffmpeg_filtergraph(
             if background_style == "blurred":
                 filters.append(
                     f"[0:v]split=3[bg_raw][main_raw][pip_raw];"
-                    f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                    f"[bg_raw]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[main_raw]{crop_main}[fg_169];"
                     f"[bg_blurred][fg_169]overlay=0:656[main_base];"
                     f"{pip_crop}"
@@ -2447,7 +2466,7 @@ def build_ffmpeg_filtergraph(
         if background_style == "blurred":
             filters.append(
                 f"[0:v]split=2[bg_raw][fg_raw];"
-                f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                f"[bg_raw]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                 f"[fg_raw]{crop_11}[fg_square];"
                 f"[bg_blurred][fg_square]overlay=0:420[layout_base]"
             )
@@ -2467,7 +2486,7 @@ def build_ffmpeg_filtergraph(
         if background_style == "blurred":
             filters.append(
                 f"[0:v]split=2[bg_raw][fg_raw];"
-                f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                f"[bg_raw]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                 f"[fg_raw]{crop_43}[fg_43];"
                 f"[bg_blurred][fg_43]overlay=0:555[layout_base]"
             )
@@ -2499,7 +2518,7 @@ def build_ffmpeg_filtergraph(
         if background_style == "blurred":
             filters.append(
                 f"[0:v]split=2[bg_raw][fg_raw];"
-                f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                f"[bg_raw]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                 f"[fg_raw]{crop_169}[fg_169];"
                 f"[bg_blurred][fg_169]overlay=0:656[layout_base]"
             )
@@ -2514,7 +2533,7 @@ def build_ffmpeg_filtergraph(
     if ass_subtitles_path and os.path.exists(ass_subtitles_path):
         raw_ass = str(Path(ass_subtitles_path).resolve()).replace("\\", "/")
         escaped_ass = raw_ass.replace(":", "\\:").replace("'", "'\\''")
-        if FONTS_DIR.exists() and any(FONTS_DIR.glob("*.ttf")):
+        if FONTS_DIR.exists() and (any(FONTS_DIR.glob("*.ttf")) or any(FONTS_DIR.glob("*.otf")) or any(FONTS_DIR.glob("*.woff*"))):
             raw_fonts = str(FONTS_DIR.resolve()).replace("\\", "/")
             escaped_fonts = raw_fonts.replace(":", "\\:").replace("'", "'\\''")
             sub_filter = f"{current_v}subtitles='{escaped_ass}':fontsdir='{escaped_fonts}'[v_final]"
@@ -2784,13 +2803,26 @@ def render_clip_to_mp4(
     if not shutil.which("ffmpeg"):
         raise RuntimeError("FFmpeg is not installed or not found in system PATH. Please install FFmpeg (e.g. 'winget install Gyan.FFmpeg') and restart your terminal.")
 
-    logger.info(f"Rendering final vertical clip to {output_mp4_path} with {chosen_encoder_name} (Selection: {hardware_accel}, BGM: {bgm_enabled}, Watermark: {watermark_enabled})...")
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
-    if res.returncode != 0:
-        logger.warning(f"Hardware encoder ({chosen_encoder_name}) failed (code {res.returncode}): {res.stderr[:250] if res.stderr else ''}")
+    dur = max(1.0, float(clip_duration))
+    # Dynamic timeouts scaled to clip duration (e.g. 60s -> 600s / 10m, 120s -> 1080s / 18m, 180s -> 1560s / 26m)
+    render_timeout = max(360, min(2400, int(dur * 8) + 120))
+    cpu_render_timeout = max(480, min(3000, int(dur * 12) + 180))
+
+    logger.info(f"Rendering final vertical clip to {output_mp4_path} with {chosen_encoder_name} (Duration: {dur:.1f}s, Timeout: {render_timeout}s, Selection: {hardware_accel}, BGM: {bgm_enabled}, Watermark: {watermark_enabled})...")
+
+    res = None
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=render_timeout)
+    except subprocess.TimeoutExpired:
+        logger.warning(f"Hardware encoder ({chosen_encoder_name}) timed out after {render_timeout}s.")
+        res = None
+
+    if res is None or res.returncode != 0:
+        err_msg_initial = res.stderr[:250] if (res and res.stderr) else f"Timed out after {render_timeout}s"
+        logger.warning(f"Hardware encoder ({chosen_encoder_name}) failed or timed out: {err_msg_initial}")
         # Automatic fallback to universal CPU encoding (libx264) if chosen hardware encoder fails
         if chosen_encoder_name != "libx264":
-            logger.info("Retrying render with universal multi-threaded CPU encoder (libx264)...")
+            logger.info(f"Retrying render with universal multi-threaded CPU encoder (libx264, timeout: {cpu_render_timeout}s)...")
             cpu_cmd = [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                 "-i", str(video_path),
@@ -2805,7 +2837,18 @@ def render_clip_to_mp4(
                 "-shortest",
                 str(output_mp4_path)
             ]
-            res_cpu = subprocess.run(cpu_cmd, capture_output=True, text=True, timeout=240)
+            res_cpu = None
+            try:
+                res_cpu = subprocess.run(cpu_cmd, capture_output=True, text=True, timeout=cpu_render_timeout)
+            except subprocess.TimeoutExpired:
+                logger.error(f"FFmpeg CPU fallback timed out after {cpu_render_timeout}s.")
+                if os.path.exists(output_mp4_path):
+                    try:
+                        os.unlink(output_mp4_path)
+                    except Exception:
+                        pass
+                raise RuntimeError(f"FFmpeg rendering timed out after {cpu_render_timeout}s for clip of duration {dur:.1f}s.")
+
             if res_cpu.returncode == 0 and os.path.exists(output_mp4_path) and is_valid_mp4(output_mp4_path):
                 logger.info(f"Successfully rendered with CPU fallback: {output_mp4_path}")
                 return str(output_mp4_path)
@@ -2815,7 +2858,7 @@ def render_clip_to_mp4(
                         os.unlink(output_mp4_path)
                     except Exception:
                         pass
-                err_text = res_cpu.stderr or res.stderr or "Unknown FFmpeg error"
+                err_text = res_cpu.stderr if (res_cpu and res_cpu.stderr) else (res.stderr if (res and res.stderr) else "Unknown FFmpeg error")
                 if "moov atom not found" in err_text.lower():
                     raise RuntimeError("FFmpeg rendering failed: Source video segment is incomplete ('moov atom not found'). Please retry rendering this clip.")
                 logger.error(f"FFmpeg CPU fallback also failed: {err_text}")
@@ -2826,6 +2869,8 @@ def render_clip_to_mp4(
                     os.unlink(output_mp4_path)
                 except Exception:
                     pass
+            if res is None:
+                raise RuntimeError(f"FFmpeg rendering timed out after {render_timeout}s for clip of duration {dur:.1f}s.")
             err_text = res.stderr or "Unknown FFmpeg error"
             if "moov atom not found" in err_text.lower():
                 raise RuntimeError("FFmpeg rendering failed: Source video segment is incomplete ('moov atom not found'). Please retry rendering this clip.")
