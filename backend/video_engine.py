@@ -487,7 +487,14 @@ def transcribe_local_video_file(file_path: Union[str, Path], progress_callback=N
         progress_callback("Running Whisper AI", f"Extracting dialogue from {p.name} with Whisper...", 30)
 
     logger.info(f"Transcribing local file with Whisper: {p}")
-    result = whisper_model.transcribe(str(p), word_timestamps=True, fp16=False, verbose=False)
+    whisper_prompt = "Transkrip video percakapan dalam Bahasa Indonesia atau English."
+    result = whisper_model.transcribe(
+        str(p),
+        word_timestamps=True,
+        fp16=False,
+        verbose=False,
+        initial_prompt=whisper_prompt
+    )
     
     segments = result.get("segments", [])
     transcript_lines = []
@@ -1035,7 +1042,13 @@ def transcribe_clip_words(
     if whisper_model is not None:
         try:
             logger.info("Running Whisper word-level transcription as fallback...")
-            result = whisper_model.transcribe(video_path, word_timestamps=True, fp16=False)
+            whisper_prompt = "Transkrip video percakapan dalam Bahasa Indonesia atau English."
+            result = whisper_model.transcribe(
+                video_path,
+                word_timestamps=True,
+                fp16=False,
+                initial_prompt=whisper_prompt
+            )
             words = []
             for segment in result.get("segments", []):
                 for w in segment.get("words", []):

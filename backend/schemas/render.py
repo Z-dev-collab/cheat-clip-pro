@@ -49,6 +49,9 @@ class RenderSettingsModel(BaseModel):
     watermark_x: Optional[float] = 90.0
     watermark_y: Optional[float] = 8.0
     hardware_accel: Optional[str] = "auto"
+    # Multi-Segment Merged Highlight Video
+    render_mode: Optional[str] = "separate"  # "separate" | "merged"
+    compilation_title: Optional[str] = None
 
 class RenderBatchRequest(BaseModel):
     video_url: str

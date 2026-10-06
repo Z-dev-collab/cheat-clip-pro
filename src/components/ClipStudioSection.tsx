@@ -211,6 +211,10 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [textCase, setTextCase] = useState<TextCaseOption>('uppercase');
   const [titleTextCase, setTitleTextCase] = useState<TextCaseOption>('uppercase');
 
+  // Multi-Segment Merged Render Mode
+  const [renderMode, setRenderMode] = useState<'separate' | 'merged'>('separate');
+  const [compilationTitle, setCompilationTitle] = useState<string>('');
+
   // Custom Font Library State
   const [availableFonts, setAvailableFonts] = useState<FontItem[]>([
     { name: 'Outfit', is_custom: false },
@@ -258,7 +262,6 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const bgmAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Hook Sound Effect (SFX) state
-  const [hookSfxEnabled, setHookSfxEnabled] = useState<boolean>(false);
   const [hookSfxFileName, setHookSfxFileName] = useState<string>('');
   const [hookSfxFilePath, setHookSfxFilePath] = useState<string>('');
   const [hookSfxAudioUrl, setHookSfxAudioUrl] = useState<string>('');
@@ -733,6 +736,32 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     }
   };
 
+  const handleMoveClipUp = (index: number) => {
+    if (index <= 0) return;
+    setSelectedClips(prev => {
+      const next = [...prev];
+      const temp = next[index - 1];
+      next[index - 1] = next[index];
+      next[index] = temp;
+      return next;
+    });
+  };
+
+  const handleMoveClipDown = (index: number) => {
+    if (index >= selectedClips.length - 1) return;
+    setSelectedClips(prev => {
+      const next = [...prev];
+      const temp = next[index + 1];
+      next[index + 1] = next[index];
+      next[index] = temp;
+      return next;
+    });
+  };
+
+  const totalSelectedDuration = useMemo(() => {
+    return Math.round(selectedClips.reduce((acc, c) => acc + (c.end_time - c.start_time), 0));
+  }, [selectedClips]);
+
   const handleClearTempClick = () => {
     setShowClearConfirmModal(true);
   };
@@ -859,7 +888,6 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       setHookSfxFileName(data.filename || file.name);
       setHookSfxFilePath(data.file_path);
       setHookSfxAudioUrl(data.url);
-      setHookSfxEnabled(true);
     } catch (err) {
       console.error('SFX upload error:', err);
       alert('Failed to upload sound effect file. Please try an MP3, WAV, or M4A file.');
@@ -879,7 +907,6 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       hookSfxAudioRef.current.pause();
     }
     setIsHookSfxPlaying(false);
-    setHookSfxEnabled(false);
     setHookSfxFileName('');
     setHookSfxFilePath('');
     setHookSfxAudioUrl('');
@@ -1311,13 +1338,13 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       subtitleCenterYPercent: safeSubCenterY,
       selectedClips: enrichedSelectedClips,
       // Background Music
-      bgmEnabled: bgmEnabled && !!bgmFilePath,
+      bgmEnabled: !!bgmFilePath,
       bgmFilePath,
       bgmFileName,
       bgmVolume,
       bgmStartOffset,
       // Hook SFX
-      hookSfxEnabled: hookSfxEnabled && !!hookSfxFilePath,
+      hookSfxEnabled: !!hookSfxFilePath,
       hookSfxFilePath,
       hookSfxFileName,
       hookSfxVolume,
@@ -1335,6 +1362,9 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       originalAudioVolume,
       // Hardware Acceleration / Video Encoder
       hardwareAccel,
+      // Multi-Segment Merged Highlight Video
+      renderMode,
+      compilationTitle: compilationTitle.trim() || undefined,
     });
   };
 
@@ -1467,15 +1497,17 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
             {/* AI Active Speaker & Object Centering */}
             <div style={{ marginTop: '0.85rem' }}>
-              <div className="studio-checkbox-row">
+              <div className="studio-checkbox-row" style={{ display: 'flex', alignItems: 'flex-start', gap: '0.45rem', fontSize: '0.78rem' }}>
                 <input
                   type="checkbox"
                   id="faceTrackingSec"
                   checked={enableFaceTracking}
                   onChange={e => setEnableFaceTracking(e.target.checked)}
+                  style={{ width: '14px', height: '14px', cursor: 'pointer', marginTop: '2px', accentColor: 'var(--primary)' }}
                 />
-                <label htmlFor="faceTrackingSec">
-                  <strong>{t.studio.faceTracking}</strong> {t.studio.faceTrackingDesc}
+                <label htmlFor="faceTrackingSec" style={{ cursor: 'pointer', color: 'var(--text-secondary)', fontWeight: 400, fontSize: '0.78rem', lineHeight: 1.45 }}>
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{t.studio.faceTracking}</span>{' '}
+                  <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>{t.studio.faceTrackingDesc}</span>
                 </label>
               </div>
 
@@ -1616,7 +1648,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             {/* Visibility Selector */}
             <div className="title-inputs-row" style={{ alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.65rem' }}>
               <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                {t.studio.subtitlesVisibilityLabel || "Banner Display:"}
+                {t.studio.titleVisibilityLabel || "Title Display:"}
               </span>
               <select
                 className="studio-select"
@@ -1629,13 +1661,19 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
               </select>
             </div>
 
+            {titlePosition === 'none' && (
+              <div className="subtitles-disabled-notice-box" style={{ marginBottom: '0.75rem' }}>
+                <span>🚫 {t.studio.titleDisabledNotice || "Headline hook & title banner are disabled. Live preview and final export will have no hook banner."}</span>
+              </div>
+            )}
+
             {/* Prefix & Suffix Controls */}
             {titlePosition !== 'none' && (
               <>
                 {/* Active Clip Title Customizer */}
-                <div className="hook-clip-title-input-wrap" style={{ marginBottom: '0.75rem' }}>
+                <div className="hook-clip-title-input-wrap" style={{ marginBottom: '0.75rem', width: '100%' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
-                    <label className="hook-input-label" style={{ margin: 0, fontWeight: 600 }}>
+                    <label className="hook-input-label" style={{ margin: 0, fontWeight: 500, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                       🏷️ {t.studio.clipTitleEditLabel || "Hook Title (Active Clip):"}
                     </label>
                     {currentCustomTitle !== undefined && currentCustomTitle.trim() !== '' && currentCustomTitle !== (currentPreviewClip?.title_suggestion || currentPreviewClip?.title) && (
@@ -1654,7 +1692,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                           border: 'none',
                           color: 'var(--primary, #38bdf8)',
                           fontSize: '0.74rem',
-                          fontWeight: 600,
+                          fontWeight: 500,
                           cursor: 'pointer',
                           padding: 0,
                           textDecoration: 'underline'
@@ -1667,6 +1705,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   <input
                     type="text"
                     className="studio-text-input"
+                    style={{ width: '100%', boxSizing: 'border-box' }}
                     placeholder={currentPreviewClip?.title_suggestion || currentPreviewClip?.title || t.studio.titlePlaceholder}
                     value={currentCustomTitle !== undefined ? currentCustomTitle : (currentPreviewClip?.title_suggestion || currentPreviewClip?.title || '')}
                     onChange={e => {
@@ -2670,20 +2709,10 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           {/* 6. Hook Sound Effect (SFX) */}
           <div className="studio-card-group">
             <div className="group-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                <span className="group-title">{t.studio.hookSfxTitle}</span>
-                <label style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={hookSfxEnabled}
-                    onChange={e => setHookSfxEnabled(e.target.checked)}
-                    style={{ accentColor: 'var(--primary)', width: '16px', height: '16px', cursor: 'pointer' }}
-                  />
-                </label>
-                <span className={`status-pill ${hookSfxEnabled && hookSfxFilePath ? 'pill-active' : ''}`} style={{ fontSize: '0.68rem', padding: '0.15rem 0.5rem' }}>
-                  {hookSfxEnabled && hookSfxFilePath ? t.studio.hookSfxActiveBadge : t.studio.bgmOptionalBadge}
-                </span>
-              </div>
+              <span className="group-title">{t.studio.hookSfxTitle}</span>
+              <span className="group-badge" style={{ color: hookSfxFilePath ? '#10b981' : 'var(--text-muted)', fontWeight: 500 }}>
+                {hookSfxFilePath ? t.studio.hookSfxActiveBadge : t.studio.bgmOptionalBadge}
+              </span>
             </div>
 
             <div className="group-content" style={{ marginTop: '0.6rem' }}>
@@ -2846,19 +2875,19 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           </div>
 
           {/* 8. Video Watermark Branding */}
-          <div className="studio-card-group">
-            <div className="group-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div className="studio-card-group" style={!watermarkEnabled ? { padding: '1rem 1.4rem' } : undefined}>
+            <div className="group-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: watermarkEnabled ? '0.85rem' : 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                <span className="group-title">{t.studio.watermarkTitle}</span>
-                <label style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}>
+                <span className="group-title" style={{ margin: 0 }}>{t.studio.watermarkTitle}</span>
+                <label style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer', margin: 0 }}>
                   <input
                     type="checkbox"
                     checked={watermarkEnabled}
                     onChange={e => setWatermarkEnabled(e.target.checked)}
-                    style={{ accentColor: 'var(--primary)', width: '16px', height: '16px', cursor: 'pointer' }}
+                    style={{ accentColor: 'var(--primary)', width: '15px', height: '15px', cursor: 'pointer', margin: 0 }}
                   />
                 </label>
-                <span className={`status-pill ${watermarkEnabled ? 'pill-active' : ''}`} style={{ fontSize: '0.68rem', padding: '0.15rem 0.5rem' }}>
+                <span className={`status-pill ${watermarkEnabled ? 'pill-active' : ''}`} style={{ fontSize: '0.68rem', padding: '0.15rem 0.5rem', fontWeight: 500 }}>
                   {watermarkEnabled ? t.studio.watermarkBadgeEnabled : t.studio.watermarkBadgeDisabled}
                 </span>
               </div>
@@ -3132,94 +3161,68 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
           {/* 8. Hardware Acceleration & Video Encoder */}
           <div className="studio-card-group">
-            <div className="group-header">
-              <span className="group-title">⚡ {t.studio.hwTitle}</span>
-              <span className="group-badge">{t.studio.hwBadge}</span>
+            <div className="group-header" style={{ marginBottom: '0.65rem' }}>
+              <span className="group-title">{t.studio.hwTitle}</span>
+              <span className="group-badge" style={{ fontWeight: 500 }}>
+                {hardwareAccel === 'auto'
+                  ? (hardwareInfo?.recommended ? hardwareInfo.recommended.toUpperCase() : t.studio.hwDetectedPill)
+                  : hardwareAccel.toUpperCase()}
+              </span>
             </div>
-            <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: '0 0 0.85rem 0', lineHeight: 1.4 }}>
+            <p style={{ fontSize: '0.74rem', color: 'var(--text-muted)', margin: '0 0 0.65rem 0', lineHeight: 1.4, fontWeight: 400 }}>
               {t.studio.hwSubtitle}
             </p>
 
-            <div className="hardware-options-grid">
-              {/* Auto Option */}
-              <button
-                type="button"
-                className={`hardware-option-card ${hardwareAccel === 'auto' ? 'active' : ''}`}
-                onClick={() => setHardwareAccel('auto')}
+            <div className="hardware-dropdown-container">
+              <select
+                id="hardware-accel-select"
+                className="studio-select"
+                value={hardwareAccel}
+                onChange={e => setHardwareAccel(e.target.value as HardwareAccelOption)}
+                style={{
+                  width: '100%',
+                  padding: '0.6rem 0.85rem',
+                  borderRadius: '10px',
+                  fontSize: '0.82rem',
+                  background: 'var(--bg-surface-hover)',
+                  border: '1px solid var(--border-color)',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  fontWeight: 500,
+                  outline: 'none',
+                }}
               >
-                <div className="hw-card-top">
-                  <div className="hw-radio-dot"></div>
-                  <span className="hw-card-name">{t.studio.hwAuto}</span>
-                  <span className="hw-status-pill active">{t.studio.hwDetectedPill}</span>
-                </div>
-                <span className="hw-card-sub">
-                  {hardwareInfo?.recommended
-                    ? `${t.studio.hwAutoDesc} · (${hardwareInfo.recommended.toUpperCase()})`
-                    : t.studio.hwAutoDesc}
+                <option value="auto">
+                  {t.studio.hwAuto} ({t.studio.hwDetectedPill}
+                  {hardwareInfo?.recommended ? `: ${hardwareInfo.recommended.toUpperCase()}` : ''})
+                </option>
+                <option value="nvenc" disabled={hardwareInfo?.support && !hardwareInfo.support.nvenc}>
+                  {t.studio.hwNvenc} ({hardwareInfo?.support?.nvenc ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill})
+                </option>
+                <option value="amf" disabled={hardwareInfo?.support && !hardwareInfo.support.amf}>
+                  {t.studio.hwAmf} ({hardwareInfo?.support?.amf ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill})
+                </option>
+                <option value="qsv" disabled={hardwareInfo?.support && !hardwareInfo.support.qsv}>
+                  {t.studio.hwQsv} ({hardwareInfo?.support?.qsv ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill})
+                </option>
+                <option value="cpu">
+                  {t.studio.hwCpu} ({t.studio.hwSupportedPill})
+                </option>
+              </select>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginTop: '0.45rem', fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 400 }}>
+                <span>
+                  {hardwareAccel === 'auto'
+                    ? (hardwareInfo?.recommended ? `${t.studio.hwAutoDesc} · Recommended: ${hardwareInfo.recommended.toUpperCase()}` : t.studio.hwAutoDesc)
+                    : hardwareAccel === 'nvenc'
+                    ? t.studio.hwNvencDesc
+                    : hardwareAccel === 'amf'
+                    ? t.studio.hwAmfDesc
+                    : hardwareAccel === 'qsv'
+                    ? t.studio.hwQsvDesc
+                    : t.studio.hwCpuDesc}
                 </span>
-              </button>
-
-              {/* NVIDIA NVENC */}
-              <button
-                type="button"
-                className={`hardware-option-card ${hardwareAccel === 'nvenc' ? 'active' : ''}`}
-                onClick={() => setHardwareAccel('nvenc')}
-              >
-                <div className="hw-card-top">
-                  <div className="hw-radio-dot"></div>
-                  <span className="hw-card-name">{t.studio.hwNvenc}</span>
-                  <span className={`hw-status-pill ${hardwareInfo?.support?.nvenc ? 'active' : 'inactive'}`}>
-                    {hardwareInfo?.support?.nvenc ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill}
-                  </span>
-                </div>
-                <span className="hw-card-sub">{t.studio.hwNvencDesc}</span>
-              </button>
-
-              {/* AMD AMF */}
-              <button
-                type="button"
-                className={`hardware-option-card ${hardwareAccel === 'amf' ? 'active' : ''}`}
-                onClick={() => setHardwareAccel('amf')}
-              >
-                <div className="hw-card-top">
-                  <div className="hw-radio-dot"></div>
-                  <span className="hw-card-name">{t.studio.hwAmf}</span>
-                  <span className={`hw-status-pill ${hardwareInfo?.support?.amf ? 'active' : 'inactive'}`}>
-                    {hardwareInfo?.support?.amf ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill}
-                  </span>
-                </div>
-                <span className="hw-card-sub">{t.studio.hwAmfDesc}</span>
-              </button>
-
-              {/* Intel QuickSync */}
-              <button
-                type="button"
-                className={`hardware-option-card ${hardwareAccel === 'qsv' ? 'active' : ''}`}
-                onClick={() => setHardwareAccel('qsv')}
-              >
-                <div className="hw-card-top">
-                  <div className="hw-radio-dot"></div>
-                  <span className="hw-card-name">{t.studio.hwQsv}</span>
-                  <span className={`hw-status-pill ${hardwareInfo?.support?.qsv ? 'active' : 'inactive'}`}>
-                    {hardwareInfo?.support?.qsv ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill}
-                  </span>
-                </div>
-                <span className="hw-card-sub">{t.studio.hwQsvDesc}</span>
-              </button>
-
-              {/* CPU Software libx264 */}
-              <button
-                type="button"
-                className={`hardware-option-card ${hardwareAccel === 'cpu' ? 'active' : ''}`}
-                onClick={() => setHardwareAccel('cpu')}
-              >
-                <div className="hw-card-top">
-                  <div className="hw-radio-dot"></div>
-                  <span className="hw-card-name">{t.studio.hwCpu}</span>
-                  <span className="hw-status-pill active">{t.studio.hwSupportedPill}</span>
-                </div>
-                <span className="hw-card-sub">{t.studio.hwCpuDesc}</span>
-              </button>
+              </div>
             </div>
           </div>
 
@@ -3319,6 +3322,28 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         </div>
 
                         <div className="batch-title-card-right">
+                          {renderMode === 'merged' && (
+                            <div className="segment-reorder-group">
+                              <button
+                                type="button"
+                                className="segment-reorder-btn"
+                                onClick={() => handleMoveClipUp(i)}
+                                disabled={i === 0}
+                                title={t.studio.moveSegmentUp}
+                              >
+                                ▲
+                              </button>
+                              <button
+                                type="button"
+                                className="segment-reorder-btn"
+                                onClick={() => handleMoveClipDown(i)}
+                                disabled={i === selectedClips.length - 1}
+                                title={t.studio.moveSegmentDown}
+                              >
+                                ▼
+                              </button>
+                            </div>
+                          )}
                           {hasCustomTitle && (
                             <button
                               type="button"
@@ -3379,6 +3404,75 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     </div>
                   );
                 })}
+              </div>
+            )}
+          </div>
+
+          {/* Export Mode Switcher (Separate vs Merged Highlight Video) */}
+          <div className="studio-card-group export-mode-group">
+            <div className="group-header">
+              <span className="group-title">⚡ {t.studio.renderModeTitle}</span>
+              {renderMode === 'merged' && (
+                <span className="group-badge" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                  {t.studio.compilationSegmentsSummary(selectedClips.length, totalSelectedDuration)}
+                </span>
+              )}
+            </div>
+
+            <div className="export-mode-switcher">
+              <button
+                type="button"
+                className={`export-mode-btn ${renderMode === 'separate' ? 'active' : ''}`}
+                onClick={() => setRenderMode('separate')}
+              >
+                <div className="mode-btn-content">
+                  <span className="mode-btn-title">{t.studio.renderModeSeparate}</span>
+                  <span className="mode-btn-desc">{t.studio.renderModeSeparateDesc}</span>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                className={`export-mode-btn ${renderMode === 'merged' ? 'active' : ''}`}
+                onClick={() => setRenderMode('merged')}
+              >
+                <div className="mode-btn-content">
+                  <span className="mode-btn-title">{t.studio.renderModeMerged}</span>
+                  <span className="mode-btn-desc">{t.studio.renderModeMergedDesc}</span>
+                </div>
+              </button>
+            </div>
+
+            {/* If Merged mode is selected, show Merged Video File Name input */}
+            {renderMode === 'merged' && (
+              <div className="compilation-config-card">
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.45rem' }}>
+                  <label className="compilation-label" style={{ margin: 0, fontWeight: 500, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                    <span>📁 {t.studio.compilationHookLabel}</span>
+                  </label>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 400 }}>
+                    {t.studio.fileNameBadge || 'Optional'}
+                  </span>
+                </div>
+                <input
+                  type="text"
+                  className="compilation-title-input"
+                  placeholder={
+                    (() => {
+                      if (selectedClips.length === 0) return t.studio.compilationHookPlaceholder;
+                      const first = selectedClips[0];
+                      const firstKey = `${first.start_time}_${first.end_time}`;
+                      const custom = customClipTitles[firstKey];
+                      const base = (custom !== undefined && custom.trim()) ? custom.trim() : (first.title_suggestion || first.title || 'Highlight Video');
+                      return `${base.trim()} (Merged)`;
+                    })()
+                  }
+                  value={compilationTitle}
+                  onChange={e => setCompilationTitle(e.target.value)}
+                />
+                <p style={{ margin: '0.4rem 0 0 0', fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 400, lineHeight: 1.4 }}>
+                  {t.studio.compilationFileNameHint}
+                </p>
               </div>
             )}
           </div>
@@ -3564,8 +3658,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                           style={{
                             width: '100%',
                             height: '100%',
-                            objectFit: 'cover',
-                            objectPosition: `${previewCropPercent}% 50%`,
+                            objectFit: isLandscape || aspectRatio === '16:9' ? 'contain' : 'cover',
+                            objectPosition: isLandscape ? 'center center' : `${previewCropPercent}% 50%`,
                             transition: 'object-position 0.3s ease-out'
                           }}
                           onPlay={() => {
@@ -3917,19 +4011,19 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                       title={t.studio.hwChangeHint}
                     >
                       <option value="auto">
-                        ⚡ Auto ({hardwareInfo?.recommended ? hardwareInfo.recommended.toUpperCase() : 'NVENC'})
+                        Auto ({hardwareInfo?.recommended ? hardwareInfo.recommended.toUpperCase() : 'NVENC'})
                       </option>
                       <option value="nvenc">
-                        🟢 NVENC {hardwareInfo?.support?.nvenc ? '✓' : ''}
+                        NVENC {hardwareInfo?.support?.nvenc ? '(Ready)' : ''}
                       </option>
                       <option value="amf">
-                        🔴 AMD AMF {hardwareInfo?.support?.amf ? '✓' : ''}
+                        AMD AMF {hardwareInfo?.support?.amf ? '(Ready)' : ''}
                       </option>
                       <option value="qsv">
-                        🔵 Intel QSV {hardwareInfo?.support?.qsv ? '✓' : ''}
+                        Intel QSV {hardwareInfo?.support?.qsv ? '(Ready)' : ''}
                       </option>
                       <option value="cpu">
-                        ⚙️ CPU (libx264)
+                        CPU (libx264)
                       </option>
                     </select>
                   </div>
@@ -4379,6 +4473,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             <>{t.studio.launchingRenderBtn}</>
           ) : selectedClips.length === 0 ? (
             <>{t.studio.selectClipWarning}</>
+          ) : renderMode === 'merged' ? (
+            <>{t.studio.mergedRenderCta(selectedClips.length, totalSelectedDuration)}</>
           ) : (
             <>
               {t.studio.batchRenderCta(selectedClips.length)}

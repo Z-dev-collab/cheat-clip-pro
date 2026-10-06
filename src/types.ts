@@ -146,6 +146,9 @@ export interface RenderSettings {
   watermarkY?: number; // 0 to 100%
   // Hardware Acceleration / Video Encoder
   hardwareAccel?: HardwareAccelOption;
+  // Multi-Segment Merged Highlight Video
+  renderMode?: 'separate' | 'merged';
+  compilationTitle?: string;
 }
 
 export interface RenderClipStatus {
