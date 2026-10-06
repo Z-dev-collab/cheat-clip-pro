@@ -42,18 +42,25 @@ def free_ports_windows(ports=(8000, 5173)):
 
     # Method 2: Fallback netstat check
     try:
-        out = subprocess.check_output("netstat -ano -p tcp", shell=True, text=True, timeout=5)
+        out = subprocess.check_output(["netstat", "-ano", "-p", "tcp"], text=True, timeout=5)
         for line in out.splitlines():
             parts = line.strip().split()
             if len(parts) >= 5 and parts[0].upper() == "TCP":
                 local_addr = parts[1]
-                pid = parts[-1]
-                for p in ports:
-                    if local_addr.endswith(f":{p}") and pid.isdigit() and int(pid) != current_pid and int(pid) > 4:
-                        try:
-                            subprocess.run(f"taskkill /F /PID {pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        except Exception:
-                            pass
+                pid_str = parts[-1]
+                if pid_str.isdigit():
+                    pid = int(pid_str)
+                    for p in ports:
+                        if local_addr.endswith(f":{p}") and pid != current_pid and pid > 4:
+                            try:
+                                subprocess.run(
+                                    ["taskkill", "/F", "/PID", str(pid)],
+                                    shell=False,
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL
+                                )
+                            except Exception:
+                                pass
     except Exception:
         pass
 
@@ -61,8 +68,17 @@ def free_ports_unix(ports=(8000, 5173)):
     """Frees specified ports on Unix/macOS."""
     for p in ports:
         try:
-            cmd = f"lsof -ti :{p} | xargs kill -9"
-            subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            p_int = int(p)
+            out = subprocess.check_output(["lsof", "-ti", f":{p_int}"], text=True, timeout=5)
+            for pid_str in out.splitlines():
+                pid_str = pid_str.strip()
+                if pid_str.isdigit() and int(pid_str) > 1:
+                    subprocess.run(
+                        ["kill", "-9", pid_str],
+                        shell=False,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
         except Exception:
             pass
 

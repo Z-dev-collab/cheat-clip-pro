@@ -115,6 +115,42 @@ def clear_temp_files() -> dict:
     }
 
 
+def cleanup_expired_temp_files(max_age_hours: int = 48) -> dict:
+    """
+    Cleans up temporary video frames, audio slices, and ASS files that are older than max_age_hours.
+    Strictly preserves cookies.txt and active files.
+    """
+    import time
+    base_dir = Path(_base_dir)
+    cutoff_time = time.time() - (max_age_hours * 3600)
+    cleaned_count = 0
+    cleaned_bytes = 0
+
+    PROTECTED_COOKIE_NAMES = {"cookies.txt", ".cookies", "youtube_cookies.txt", "cookie.txt"}
+
+    for target in [TEMP_DIR, base_dir / "temp"]:
+        if not target.exists() or not target.is_dir():
+            continue
+        for item in list(target.rglob("*")):
+            if item.is_file() and item.name.lower() not in PROTECTED_COOKIE_NAMES:
+                try:
+                    mtime = item.stat().st_mtime
+                    if mtime < cutoff_time:
+                        sz = item.stat().st_size
+                        item.unlink()
+                        cleaned_count += 1
+                        cleaned_bytes += sz
+                except Exception:
+                    pass
+
+    return {
+        "success": True,
+        "cleaned_files": cleaned_count,
+        "cleaned_bytes": cleaned_bytes,
+        "max_age_hours": max_age_hours
+    }
+
+
 def find_git_executable() -> str:
     if shutil.which("git"):
         return "git"

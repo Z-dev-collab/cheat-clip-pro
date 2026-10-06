@@ -154,15 +154,30 @@ LANGUAGE_NAMES = {
 }
 
 ID_STOPWORDS = {
-    'yang', 'dan', 'di', 'ini', 'itu', 'dengan', 'untuk', 'tidak', 'dari', 'dalam',
-    'akan', 'pada', 'juga', 'ke', 'karena', 'bisa', 'ada', 'mereka', 'sudah', 'kita',
-    'saya', 'kamu', 'orang', 'jadi', 'lagi', 'kalo', 'kalau', 'ya', 'banget', 'bukan',
-    'tapi', 'sama', 'tau', 'tahu', 'gimana', 'kenapa', 'seperti', 'apa', 'nah', 'udah',
-    'nih', 'dong', 'kan', 'lah', 'bang', 'mas', 'mbak', 'kak', 'nggak', 'gak', 'aja',
-    'bener', 'gitu', 'adalah', 'oleh', 'secara', 'tersebut', 'pun', 'kok', 'deh', 'sih',
-    'gue', 'lu', 'lo', 'luar', 'biasa', 'hanya', 'sangat', 'bagi', 'antara', 'tentang',
-    'banyak', 'kurang', 'harus', 'mau', 'maupun', 'saat', 'ketika', 'terus', 'pasti',
-    'masih', 'punya', 'makanya', 'ngomong', 'bikin'
+    # Pronouns & People
+    'saya', 'aku', 'gue', 'gua', 'gw', 'kamu', 'lu', 'lo', 'elu', 'kita', 'kami', 'mereka',
+    'dia', 'beliau', 'kalian', 'orang', 'bang', 'mas', 'mbak', 'kak', 'kakak', 'bro', 'sis',
+    'pak', 'bapak', 'bu', 'ibu', 'om', 'tante', 'anak', 'teman', 'temen', 'gais', 'guys',
+    # Connectives, Prepositions & Articles
+    'yang', 'dan', 'di', 'ke', 'dari', 'pada', 'dalam', 'untuk', 'utk', 'dengan', 'dgn',
+    'sama', 'karena', 'krn', 'sebab', 'oleh', 'bagi', 'antara', 'tentang', 'seperti', 'kayak',
+    'kalo', 'kalau', 'klo', 'jika', 'apabila', 'tapi', 'tp', 'tetapi', 'namun', 'melainkan',
+    'walaupun', 'meskipun', 'supaya', 'agar', 'atau', 'maupun', 'serta', 'yaitu', 'yakni',
+    # Particles & Conversational Markers (unique to Indonesian speech)
+    'ya', 'nih', 'tuh', 'dong', 'kan', 'lah', 'deh', 'sih', 'kok', 'loh', 'lho', 'kah', 'pun',
+    'nggak', 'gak', 'ngga', 'ga', 'tak', 'bukan', 'jangan', 'udah', 'udh', 'sudah', 'belum', 'blm',
+    'banget', 'bgt', 'aja', 'saja', 'doang', 'cuma', 'cuman', 'hanya', 'sangat', 'amat',
+    'gitu', 'gini', 'begitu', 'begini', 'makanya', 'makannya', 'padahal', 'emang', 'memang',
+    'bener', 'beneran', 'benar', 'pasti', 'bisa', 'gabisa', 'dapat', 'boleh', 'harus', 'hrs',
+    'mau', 'ingin', 'bakal', 'akan', 'lagi', 'lg', 'sedang', 'masih', 'msh', 'terus', 'trus',
+    'dulu', 'dl', 'kemarin', 'besok', 'nanti', 'sekarang', 'skrg', 'saat', 'ketika', 'waktu', 'pas',
+    # Question words
+    'apa', 'apakah', 'siapa', 'kenapa', 'knp', 'mengapa', 'gimana', 'bagaimana', 'dimana', 'kapan',
+    # Common speech verbs & concepts
+    'jadi', 'adalah', 'ada', 'punya', 'tau', 'tahu', 'tonton', 'nonton', 'bilang', 'katanya',
+    'kata', 'ngomong', 'bikin', 'buat', 'liat', 'lihat', 'pikir', 'kira', 'rasa', 'rasanya',
+    'menurut', 'maksud', 'maksudnya', 'paham', 'ngerti', 'banyak', 'kurang', 'lebih', 'semua',
+    'sendiri', 'lain', 'lainnya', 'biasa', 'luar', 'soal', 'soalnya', 'masalah', 'cerita'
 }
 
 EN_STOPWORDS = {
@@ -174,7 +189,10 @@ EN_STOPWORDS = {
     'them', 'some', 'could', 'him', 'into', 'other', 'than', 'then', 'now', 'look',
     'only', 'come', 'its', 'over', 'also', 'back', 'after', 'use', 'two', 'our',
     'work', 'first', 'well', 'way', 'even', 'new', 'want', 'because', 'any', 'these',
-    'give', 'day', 'most', 'us', 'time', 'really', 'something', 'good', 'make'
+    'give', 'day', 'most', 'us', 'time', 'really', 'something', 'good', 'make',
+    'gonna', 'wanna', 'gotta', 'yeah', 'yes', 'no', 'okay', 'right', 'here', 'why',
+    'where', 'who', 'should', 'must', 'said', 'say', 'tell', 'told', 'see', 'saw',
+    'much', 'many', 'very', 'still', 'never', 'always', 'today', 'tomorrow', 'yesterday'
 }
 
 ES_STOPWORDS = {
@@ -210,15 +228,19 @@ DE_STOPWORDS = {
 
 def detect_transcript_language(transcript_lines: List[dict], title: str = "") -> dict:
     """
-    Detects the primary spoken language of the video transcript using character script inspection
-    and stopword analysis across Indonesian, English, Spanish, Portuguese, French, German, and others.
-    Returns dict: {'code': 'id', 'name': 'Indonesian (Bahasa Indonesia)', 'confidence': float}
+    Detects the primary spoken language of the video transcript with primary focus on
+    Indonesian (Bahasa Indonesia) and English.
+    
+    Prevents false Arabic/exotic classifications when Indonesian videos contain occasional
+    Arabic greetings (e.g. Assalamu'alaikum, Bismillah) or Islamic quotes.
+    
+    Returns dict: {'code': 'id'|'en'|..., 'name': str, 'confidence': float}
     """
     if not transcript_lines and not title:
         return {'code': 'en', 'name': 'English', 'confidence': 0.5}
 
     sample_texts = [title] if title else []
-    for line in (transcript_lines[:150] if transcript_lines else []):
+    for line in (transcript_lines[:250] if transcript_lines else []):
         t = line.get("text", "")
         if t:
             sample_texts.append(t)
@@ -227,50 +249,90 @@ def detect_transcript_language(transcript_lines: List[dict], title: str = "") ->
     if not full_sample:
         return {'code': 'en', 'name': 'English', 'confidence': 0.5}
 
-    # 1. Non-Latin script checks
-    if re.search(r'[\u3040-\u309F\u30A0-\u30FF]', full_sample):
-        return {'code': 'ja', 'name': LANGUAGE_NAMES['ja'], 'confidence': 0.98}
-    if re.search(r'[\uAC00-\uD7AF\u1100-\u11FF]', full_sample):
-        return {'code': 'ko', 'name': LANGUAGE_NAMES['ko'], 'confidence': 0.98}
-    if re.search(r'[\u4E00-\u9FFF]', full_sample):
-        return {'code': 'zh', 'name': LANGUAGE_NAMES['zh'], 'confidence': 0.95}
-    if re.search(r'[\u0600-\u06FF]', full_sample):
-        return {'code': 'ar', 'name': LANGUAGE_NAMES['ar'], 'confidence': 0.98}
-    if re.search(r'[\u0400-\u04FF]', full_sample):
-        return {'code': 'ru', 'name': LANGUAGE_NAMES['ru'], 'confidence': 0.98}
-
-    # 2. Latin word tokenization
+    # Extract Latin words
     tokens = re.findall(r'\b[a-zA-Z\u00C0-\u024F\u1E00-\u1EFF]+\b', full_sample.lower())
-    if not tokens:
-        return {'code': 'en', 'name': 'English', 'confidence': 0.5}
+    title_tokens = set(re.findall(r'\b[a-zA-Z]+\b', title.lower())) if title else set()
 
-    counts = {
-        'id': sum(1 for w in tokens if w in ID_STOPWORDS),
-        'en': sum(1 for w in tokens if w in EN_STOPWORDS),
+    # 1. Primary Check: Score Indonesian & English
+    # Indonesian grammatical prefixes / suffixes pattern
+    id_morphology_matches = sum(
+        1 for w in tokens
+        if len(w) >= 5 and (
+            w.startswith(('meng', 'men', 'mem', 'peng', 'pen', 'pem', 'ber', 'ter', 'di')) or
+            w.endswith(('kan', 'nya', 'lah', 'kah', 'pun'))
+        )
+    )
+
+    id_count = sum(1 for w in tokens if w in ID_STOPWORDS) + (id_morphology_matches // 3)
+    en_count = sum(1 for w in tokens if w in EN_STOPWORDS)
+
+    # Title hints
+    title_id = sum(1 for w in title_tokens if w in ID_STOPWORDS)
+    title_en = sum(1 for w in title_tokens if w in EN_STOPWORDS)
+    id_count += title_id * 2
+    en_count += title_en * 2
+
+    # 2. Strict Check: Only trigger Non-Latin scripts if they constitute DOMINANT text
+    all_letters = re.findall(r'[\w]', full_sample)
+    total_letters = len(all_letters) if all_letters else 1
+
+    arabic_chars = len(re.findall(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]', full_sample))
+    ja_chars = len(re.findall(r'[\u3040-\u309F\u30A0-\u30FF]', full_sample))
+    ko_chars = len(re.findall(r'[\uAC00-\uD7AF\u1100-\u11FF]', full_sample))
+    zh_chars = len(re.findall(r'[\u4E00-\u9FFF]', full_sample))
+    ru_chars = len(re.findall(r'[\u0400-\u04FF]', full_sample))
+
+    # If Arabic is just an Islamic greeting or snippet in an Indonesian video, DO NOT classify as Arabic!
+    if arabic_chars / total_letters > 0.45 and id_count == 0 and en_count <= 1:
+        return {'code': 'ar', 'name': LANGUAGE_NAMES['ar'], 'confidence': 0.95}
+    if ja_chars / total_letters > 0.35 and id_count == 0 and en_count <= 1:
+        return {'code': 'ja', 'name': LANGUAGE_NAMES['ja'], 'confidence': 0.95}
+    if ko_chars / total_letters > 0.35 and id_count == 0 and en_count <= 1:
+        return {'code': 'ko', 'name': LANGUAGE_NAMES['ko'], 'confidence': 0.95}
+    if zh_chars / total_letters > 0.35 and id_count == 0 and en_count <= 1:
+        return {'code': 'zh', 'name': LANGUAGE_NAMES['zh'], 'confidence': 0.95}
+    if ru_chars / total_letters > 0.35 and id_count == 0 and en_count <= 1:
+        return {'code': 'ru', 'name': LANGUAGE_NAMES['ru'], 'confidence': 0.95}
+
+    # 3. Decision between Bahasa Indonesia and English (First-class priority)
+    # Note: Indonesian tech/gaming creators use frequent English loanwords (e.g. 'guys', 'game', 'video', 'content').
+    # Therefore, if there are distinctive Indonesian markers present, it is Indonesian!
+    if id_count >= 2 and (id_count >= en_count * 0.4 or title_id > 0):
+        confidence = round(min(0.98, max(0.65, id_count / max(1, id_count + en_count))), 2)
+        return {
+            'code': 'id',
+            'name': LANGUAGE_NAMES['id'],
+            'confidence': confidence
+        }
+
+    if en_count >= 3 and (en_count > id_count * 1.5 or title_en > 0):
+        confidence = round(min(0.98, max(0.65, en_count / max(1, id_count + en_count))), 2)
+        return {
+            'code': 'en',
+            'name': LANGUAGE_NAMES['en'],
+            'confidence': confidence
+        }
+
+    # 4. Check other European Latin languages only if they substantially beat both ID and EN
+    other_counts = {
         'es': sum(1 for w in tokens if w in ES_STOPWORDS),
         'pt': sum(1 for w in tokens if w in PT_STOPWORDS),
         'fr': sum(1 for w in tokens if w in FR_STOPWORDS),
         'de': sum(1 for w in tokens if w in DE_STOPWORDS),
     }
+    best_other_lang, best_other_score = max(other_counts.items(), key=lambda item: item[1])
+    if best_other_score >= 6 and best_other_score > (id_count * 2) and best_other_score > (en_count * 1.5):
+        return {
+            'code': best_other_lang,
+            'name': LANGUAGE_NAMES.get(best_other_lang, best_other_lang.upper()),
+            'confidence': 0.85
+        }
 
-    best_lang, best_score = max(counts.items(), key=lambda item: item[1])
-    total_matches = sum(counts.values())
-    confidence = round(best_score / total_matches, 2) if total_matches > 0 else 0.5
-
-    # If match count is very small, cross-check with title words
-    if best_score < 2:
-        title_tokens = set(re.findall(r'\b[a-zA-Z]+\b', title.lower()))
-        if title_tokens.intersection(ID_STOPWORDS):
-            return {'code': 'id', 'name': LANGUAGE_NAMES['id'], 'confidence': 0.75}
-        if title_tokens.intersection(ES_STOPWORDS):
-            return {'code': 'es', 'name': LANGUAGE_NAMES['es'], 'confidence': 0.75}
-        return {'code': 'en', 'name': 'English', 'confidence': 0.5}
-
-    return {
-        'code': best_lang,
-        'name': LANGUAGE_NAMES.get(best_lang, best_lang.upper()),
-        'confidence': confidence
-    }
+    # 5. Default fallback: Compare ID vs EN directly
+    if id_count > en_count or title_id > title_en:
+        return {'code': 'id', 'name': LANGUAGE_NAMES['id'], 'confidence': 0.70}
+    
+    return {'code': 'en', 'name': LANGUAGE_NAMES['en'], 'confidence': 0.70}
 
 def sanitize_first_person_title(title: str, speaker_or_channel: str = "", lang: str = "en") -> str:
     """
@@ -323,3 +385,44 @@ def sanitize_first_person_title(title: str, speaker_or_channel: str = "", lang: 
     t = re.sub(r"^(pendapat|opini)\s+(saya|aku|gue|gw)\b", rf"Opini {indo_subject}", t, flags=re.IGNORECASE)
 
     return t.strip()
+
+
+def is_safe_remote_url(url: str, allowed_domains: Optional[set] = None) -> bool:
+    """
+    Validates if a URL is safe to fetch remotely, preventing SSRF attacks to
+    local loopback, private IP subnets, or cloud metadata services.
+    """
+    if not url:
+        return False
+    u = url.strip()
+    try:
+        import ipaddress
+        import urllib.parse
+
+        parsed = urllib.parse.urlsplit(u)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        hostname = (parsed.hostname or "").lower().strip()
+        if not hostname:
+            return False
+
+        # Block localhost / link-local / loopback hostnames
+        if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0", "metadata.google.internal"):
+            return False
+
+        # Check if hostname is an IP address and verify if private/reserved
+        try:
+            ip = ipaddress.ip_address(hostname)
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                return False
+        except ValueError:
+            # Not an IP literal, it's a domain name
+            pass
+
+        if allowed_domains:
+            if not any(hostname == d or hostname.endswith("." + d) for d in allowed_domains):
+                return False
+
+        return True
+    except Exception:
+        return False

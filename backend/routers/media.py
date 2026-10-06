@@ -13,6 +13,7 @@ from backend.config import (
     EXPORTS_DIR,
     TEMP_DIR,
     UPLOADS_DIR,
+    FONTS_DIR,
     detect_speaker_face_box,
     extract_clip_frame,
     get_video_file_metadata,
@@ -21,6 +22,56 @@ from backend.config import (
 )
 
 router = APIRouter(tags=["Media"])
+
+
+MAX_VIDEO_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024   # 4 GB
+MAX_AUDIO_UPLOAD_BYTES = 100 * 1024 * 1024        # 100 MB
+MAX_SFX_UPLOAD_BYTES = 50 * 1024 * 1024           # 50 MB
+MAX_IMAGE_UPLOAD_BYTES = 25 * 1024 * 1024         # 25 MB
+MAX_FONT_UPLOAD_BYTES = 50 * 1024 * 1024          # 50 MB
+
+
+def _is_safe_path(target_path: Path) -> bool:
+    """Ensures the resolved file path is strictly located within allowed media directories."""
+    try:
+        resolved = target_path.resolve()
+        allowed_roots = [UPLOADS_DIR.resolve(), TEMP_DIR.resolve(), EXPORTS_DIR.resolve(), FONTS_DIR.resolve()]
+        return any(resolved == root or resolved.is_relative_to(root) for root in allowed_roots)
+    except Exception:
+        return False
+
+
+async def _save_uploaded_file_chunked(file: UploadFile, save_path: Path, max_bytes: int) -> int:
+    """
+    Streams upload content in 1MB chunks to disk while enforcing a strict maximum size limit
+    to prevent memory exhaustion (OOM) and disk flood attacks.
+    """
+    total_written = 0
+    chunk_size = 1024 * 1024  # 1 MB
+    try:
+        with open(save_path, "wb") as f:
+            while chunk := await file.read(chunk_size):
+                total_written += len(chunk)
+                if total_written > max_bytes:
+                    f.close()
+                    if save_path.exists():
+                        save_path.unlink()
+                    limit_mb = round(max_bytes / (1024 * 1024))
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Uploaded file exceeds the maximum allowed size limit of {limit_mb} MB."
+                    )
+                f.write(chunk)
+        return total_written
+    except HTTPException:
+        raise
+    except Exception as e:
+        if save_path.exists():
+            try:
+                save_path.unlink()
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail=f"Failed to save upload: {str(e)}")
 
 
 @router.post("/api/upload-video")
@@ -43,10 +94,7 @@ async def upload_video(file: UploadFile = File(...)):
     save_path = UPLOADS_DIR / unique_name
     
     try:
-        content = await file.read()
-        with open(save_path, "wb") as f:
-            f.write(content)
-        
+        bytes_written = await _save_uploaded_file_chunked(file, save_path, MAX_VIDEO_UPLOAD_BYTES)
         meta = await asyncio.to_thread(get_video_file_metadata, save_path)
         logger.info(f"Uploaded video '{file.filename}' -> saved as '{unique_name}' ({meta.get('duration')}s, {meta.get('width')}x{meta.get('height')})")
         
@@ -62,8 +110,10 @@ async def upload_video(file: UploadFile = File(...)):
             "height": meta.get("height", 1080),
             "fps": meta.get("fps", 30.0),
             "has_audio": meta.get("has_audio", True),
-            "size_bytes": len(content)
+            "size_bytes": bytes_written
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to upload video: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to process video upload: {str(e)}")
@@ -76,14 +126,14 @@ def _find_video_file_on_disk(file_name: str) -> Optional[Path]:
     # Check direct paths
     for base in [UPLOADS_DIR, TEMP_DIR, EXPORTS_DIR]:
         candidate = base / clean_name
-        if candidate.exists() and candidate.is_file():
+        if candidate.exists() and candidate.is_file() and _is_safe_path(candidate):
             return candidate
 
     # Search directory listings without regex/glob pitfalls
     all_files: list[Path] = []
     for d in [UPLOADS_DIR, TEMP_DIR, EXPORTS_DIR]:
         if d.exists():
-            all_files.extend([f for f in d.iterdir() if f.is_file()])
+            all_files.extend([f for f in d.iterdir() if f.is_file() and _is_safe_path(f)])
 
     clean_lower = clean_name.lower()
     
@@ -128,7 +178,7 @@ def get_video_file(file_name: str, request: Request):
     for smooth seeking, immediate playback start, and previewing without loading the whole file.
     """
     file_path = _find_video_file_on_disk(file_name)
-    if not file_path or not file_path.exists():
+    if not file_path or not file_path.exists() or not _is_safe_path(file_path):
         raise HTTPException(status_code=404, detail="Video file not found")
 
     file_size = file_path.stat().st_size
@@ -209,17 +259,17 @@ async def upload_bgm(file: UploadFile = File(...)):
     save_path = UPLOADS_DIR / unique_name
     
     try:
-        content = await file.read()
-        with open(save_path, "wb") as f:
-            f.write(content)
+        bytes_written = await _save_uploaded_file_chunked(file, save_path, MAX_AUDIO_UPLOAD_BYTES)
         return {
             "success": True,
             "filename": file.filename,
             "saved_name": unique_name,
             "file_path": str(save_path),
             "url": f"/api/audio/{unique_name}",
-            "size_bytes": len(content)
+            "size_bytes": bytes_written
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to upload BGM: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -229,7 +279,7 @@ async def upload_bgm(file: UploadFile = File(...)):
 def get_audio_file(file_name: str):
     clean_name = os.path.basename(file_name)
     file_path = UPLOADS_DIR / clean_name
-    if not file_path.exists():
+    if not file_path.exists() or not _is_safe_path(file_path):
         raise HTTPException(status_code=404, detail="Audio file not found")
     media_type = "audio/mpeg" if clean_name.endswith(".mp3") else "audio/wav" if clean_name.endswith(".wav") else "application/octet-stream"
     return FileResponse(file_path, media_type=media_type, filename=clean_name)
@@ -249,17 +299,17 @@ async def upload_hook_sfx(file: UploadFile = File(...)):
     save_path = UPLOADS_DIR / unique_name
 
     try:
-        content = await file.read()
-        with open(save_path, "wb") as f:
-            f.write(content)
+        bytes_written = await _save_uploaded_file_chunked(file, save_path, MAX_SFX_UPLOAD_BYTES)
         return {
             "success": True,
             "filename": file.filename,
             "saved_name": unique_name,
             "file_path": str(save_path),
             "url": f"/api/audio/{unique_name}",
-            "size_bytes": len(content)
+            "size_bytes": bytes_written
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to upload Hook SFX: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -279,17 +329,17 @@ async def upload_watermark(file: UploadFile = File(...)):
     save_path = UPLOADS_DIR / unique_name
     
     try:
-        content = await file.read()
-        with open(save_path, "wb") as f:
-            f.write(content)
+        bytes_written = await _save_uploaded_file_chunked(file, save_path, MAX_IMAGE_UPLOAD_BYTES)
         return {
             "success": True,
             "filename": file.filename,
             "saved_name": unique_name,
             "file_path": str(save_path),
             "url": f"/api/watermark/{unique_name}",
-            "size_bytes": len(content)
+            "size_bytes": bytes_written
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to upload watermark: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -299,7 +349,7 @@ async def upload_watermark(file: UploadFile = File(...)):
 def get_watermark_file(file_name: str):
     clean_name = os.path.basename(file_name)
     file_path = UPLOADS_DIR / clean_name
-    if not file_path.exists():
+    if not file_path.exists() or not _is_safe_path(file_path):
         raise HTTPException(status_code=404, detail="Watermark file not found")
     media_type = "image/png" if clean_name.endswith(".png") else "image/jpeg" if (clean_name.endswith(".jpg") or clean_name.endswith(".jpeg")) else "image/webp"
     return FileResponse(file_path, media_type=media_type, filename=clean_name)
@@ -374,3 +424,127 @@ async def detect_face(
         logger.warning(f"Face detection API error: {e}")
 
     return default_res
+
+
+@router.post("/api/upload-font")
+async def upload_font(file: UploadFile = File(...)):
+    """
+    Handles custom font file uploads (.ttf, .otf, .woff, .woff2).
+    Saves to fonts directory so preview and libass / ffmpeg can immediately render with it.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+    
+    ext = os.path.splitext(file.filename)[1].lower()
+    allowed = [".ttf", ".otf", ".woff", ".woff2"]
+    if ext not in allowed:
+        raise HTTPException(status_code=400, detail=f"Unsupported font format. Allowed: {', '.join(allowed)}")
+
+    clean_stem = re.sub(r'[^a-zA-Z0-9_\-\s]', '_', os.path.splitext(file.filename)[0]).strip()
+    if not clean_stem:
+        clean_stem = f"CustomFont_{uuid.uuid4().hex[:6]}"
+    
+    saved_filename = f"{clean_stem}{ext}"
+    save_path = FONTS_DIR / saved_filename
+
+    try:
+        bytes_written = await _save_uploaded_file_chunked(file, save_path, MAX_FONT_UPLOAD_BYTES)
+        
+        # Extract font family name using PIL ImageFont
+        font_family = clean_stem
+        try:
+            from PIL import ImageFont
+            loaded_f = ImageFont.truetype(str(save_path), 24)
+            names = loaded_f.getname()
+            if names and names[0]:
+                font_family = str(names[0]).strip()
+        except Exception as font_err:
+            logger.info(f"Could not read font table name ({font_err}); using stem '{clean_stem}'")
+
+        logger.info(f"Uploaded custom font: '{file.filename}' -> saved as '{saved_filename}' (Family: '{font_family}', {bytes_written} bytes)")
+
+        return {
+            "success": True,
+            "font_name": font_family,
+            "filename": saved_filename,
+            "url": f"/api/font-file/{saved_filename}",
+            "size_bytes": bytes_written
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to upload font: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save custom font: {str(e)}")
+
+
+@router.get("/api/fonts")
+def list_available_fonts():
+    """
+    Returns the complete list of built-in and uploaded custom fonts.
+    """
+    default_builtin = [
+        "Outfit",
+        "Montserrat",
+        "Inter",
+        "Impact",
+        "Bebas Neue",
+        "Anton",
+        "Poppins",
+        "Arial Black",
+    ]
+    fonts_map = {}
+    for name in default_builtin:
+        fonts_map[name.lower()] = {
+            "name": name,
+            "is_custom": False,
+            "filename": None,
+            "url": None
+        }
+
+    # Discover fonts on disk
+    if FONTS_DIR.exists():
+        for f in FONTS_DIR.iterdir():
+            if not f.is_file():
+                continue
+            ext = f.suffix.lower()
+            if ext not in [".ttf", ".otf", ".woff", ".woff2"]:
+                continue
+            # Skip emoji helper fonts
+            if f.name.lower() in ["seguiemj.ttf", "notocoloremoji.ttf"]:
+                continue
+
+            font_family = f.stem
+            try:
+                from PIL import ImageFont
+                loaded = ImageFont.truetype(str(f), 24)
+                names = loaded.getname()
+                if names and names[0]:
+                    font_family = str(names[0]).strip()
+            except Exception:
+                pass
+
+            key = font_family.lower()
+            is_builtin = key in fonts_map and not fonts_map[key]["is_custom"]
+            fonts_map[key] = {
+                "name": font_family,
+                "is_custom": not is_builtin,
+                "filename": f.name,
+                "url": f"/api/font-file/{f.name}"
+            }
+
+    return {"success": True, "fonts": list(fonts_map.values())}
+
+
+@router.get("/api/font-file/{file_name}")
+def get_font_file(file_name: str):
+    """
+    Serves font binary with correct MIME type for frontend FontFace and CSS loading.
+    """
+    clean_name = os.path.basename(file_name)
+    file_path = FONTS_DIR / clean_name
+    if not file_path.exists() or not _is_safe_path(file_path):
+        raise HTTPException(status_code=404, detail="Font file not found")
+
+    ext = os.path.splitext(clean_name)[1].lower()
+    media_type = "font/woff2" if ext == ".woff2" else "font/woff" if ext == ".woff" else "font/otf" if ext == ".otf" else "font/ttf"
+    return FileResponse(file_path, media_type=media_type, filename=clean_name)

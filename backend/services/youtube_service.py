@@ -77,6 +77,35 @@ def normalize_transcript(fetched_data) -> List[dict]:
     return results
 
 
+def prioritize_transcripts(transcripts: list) -> list:
+    """
+    Sorts transcript tracks ensuring Indonesian (id) and English (en) are strictly prioritized
+    over all other languages (preventing unintended Arabic, Russian, or translated tracks):
+    1. Indonesian manual tracks ('id', 'in', 'id-id')
+    2. Indonesian auto-generated tracks
+    3. English manual tracks ('en', 'en-us', 'en-gb')
+    4. English auto-generated tracks
+    5. Native ASR generated track in video's original spoken language
+    6. Other manual original tracks
+    """
+    def rank_track(t):
+        code = (getattr(t, 'language_code', '') or '').lower()
+        is_gen = getattr(t, 'is_generated', False)
+        # Indonesian
+        if code in ('id', 'in', 'id-id') or code.startswith('id-'):
+            return 0 if not is_gen else 1
+        # English
+        if code in ('en', 'en-us', 'en-gb', 'en-ca') or code.startswith('en-'):
+            return 2 if not is_gen else 3
+        # Native ASR track
+        if is_gen:
+            return 4
+        # Other manual track
+        return 5
+
+    return sorted(transcripts, key=rank_track)
+
+
 def fetch_transcript_cli(
     video_id: str,
     priority_langs: Optional[List[str]] = None,
@@ -548,29 +577,10 @@ def fetch_transcript(
             client = create_http_client(timeout=15.0)
             proxy_api = YouTubeTranscriptApi(proxy_config=proxy_cfg, http_client=client)
 
-            # 2. List all transcripts to identify original video speech language
+            # 2. List all transcripts and prioritize Indonesian and English
             try:
-                transcripts = list(proxy_api.list(video_id))
-                generated = [t for t in transcripts if getattr(t, 'is_generated', False)]
-                manual = [t for t in transcripts if not getattr(t, 'is_generated', False)]
-                
-                # The video's true spoken language is the language of the YouTube ASR generated track
-                native_code = generated[0].language_code if generated else (manual[0].language_code if manual else None)
-                
-                # Priority: manual transcript in native language, then generated native transcript
-                target_tracks = []
-                if native_code:
-                    for t in manual:
-                        if t.language_code == native_code or t.language_code.startswith(f"{native_code}-"):
-                            target_tracks.append(t)
-                    for t in generated:
-                        if t.language_code == native_code or t.language_code.startswith(f"{native_code}-"):
-                            target_tracks.append(t)
-                
-                # Fallback to any available original tracks (NO translation to other languages)
-                for t in (manual + generated):
-                    if t not in target_tracks:
-                        target_tracks.append(t)
+                all_transcripts = list(proxy_api.list(video_id))
+                target_tracks = prioritize_transcripts(all_transcripts)
                 
                 for t in target_tracks:
                     try:
@@ -634,26 +644,7 @@ def fetch_transcript(
 
         try:
             all_transcripts = list(direct_api.list(video_id))
-            generated = [t for t in all_transcripts if getattr(t, 'is_generated', False)]
-            manual = [t for t in all_transcripts if not getattr(t, 'is_generated', False)]
-            
-            # The video's true spoken language is the language of the YouTube ASR generated track
-            native_code = generated[0].language_code if generated else (manual[0].language_code if manual else None)
-            
-            # Priority: manual transcript in native language, then generated native transcript
-            target_tracks = []
-            if native_code:
-                for t in manual:
-                    if t.language_code == native_code or t.language_code.startswith(f"{native_code}-"):
-                        target_tracks.append(t)
-                for t in generated:
-                    if t.language_code == native_code or t.language_code.startswith(f"{native_code}-"):
-                        target_tracks.append(t)
-            
-            # Fallback to any available original tracks (NO translation to other languages)
-            for t in (manual + generated):
-                if t not in target_tracks:
-                    target_tracks.append(t)
+            target_tracks = prioritize_transcripts(all_transcripts)
             
             for transcript in target_tracks:
                 try:

@@ -17,9 +17,13 @@ class RenderSettingsModel(BaseModel):
     subtitles_enabled: Optional[bool] = True
     caption_style: str = "viral_pop"
     caption_font: str = "Outfit"
+    title_font: Optional[str] = "Outfit"
     font_size: str = "medium"
     title_font_size: Optional[str] = "medium"
+    font_size_px: Optional[int] = None
+    title_font_size_px: Optional[int] = None
     text_case: str = "uppercase"
+    title_text_case: Optional[str] = "uppercase"
     title_y_percent: Optional[float] = None
     subtitle_y_percent: Optional[float] = None
     subtitle_position_mode: Optional[str] = "bottom"
@@ -45,6 +49,9 @@ class RenderSettingsModel(BaseModel):
     watermark_x: Optional[float] = 90.0
     watermark_y: Optional[float] = 8.0
     hardware_accel: Optional[str] = "auto"
+    # Multi-Segment Merged Highlight Video
+    render_mode: Optional[str] = "separate"  # "separate" | "merged"
+    compilation_title: Optional[str] = None
 
 class RenderBatchRequest(BaseModel):
     video_url: str

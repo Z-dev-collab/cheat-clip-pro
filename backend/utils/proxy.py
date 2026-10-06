@@ -15,6 +15,22 @@ class TimeoutSession(requests.Session):
         kwargs.setdefault("timeout", self._default_timeout)
         return super().request(*args, **kwargs)
 
+def mask_proxy_url(proxy_url: Optional[str]) -> str:
+    """Masks basic authentication username/password in a proxy URL for safe logging and error reporting."""
+    if not proxy_url:
+        return ""
+    try:
+        parsed = urlsplit(proxy_url)
+        if parsed.username or parsed.password:
+            user = parsed.username or "user"
+            host = parsed.hostname or ""
+            port_str = f":{parsed.port}" if parsed.port else ""
+            return f"{parsed.scheme}://{user}:***@{host}{port_str}"
+        return proxy_url
+    except Exception:
+        return "<proxy_configured>"
+
+
 def get_proxy_url() -> Optional[str]:
     """Retrieves proxy URL from environment variables or synthesizes from Webshare credentials."""
     proxy = (

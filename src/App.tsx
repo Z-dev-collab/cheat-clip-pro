@@ -297,9 +297,13 @@ export default function App() {
             subtitles_enabled: settings.captionStyle !== 'none',
             caption_style: settings.captionStyle,
             caption_font: settings.captionFont,
+            title_font: settings.titleFont || settings.captionFont || 'Outfit',
             font_size: settings.fontSize,
             title_font_size: settings.titleFontSize || settings.fontSize || 'medium',
+            font_size_px: settings.fontSizePx,
+            title_font_size_px: settings.titleFontSizePx,
             text_case: settings.textCase,
+            title_text_case: settings.titleTextCase || settings.textCase,
             title_y_percent: settings.titleYPercent,
             subtitle_y_percent: settings.subtitleYPercent,
             subtitle_position_mode: settings.subtitlePositionMode || 'bottom',
@@ -326,6 +330,9 @@ export default function App() {
             watermark_y: settings.watermarkY !== undefined ? settings.watermarkY : 8.0,
             // Hardware Acceleration / Encoder
             hardware_accel: settings.hardwareAccel || 'auto',
+            // Multi-Segment Merged Highlight Video
+            render_mode: settings.renderMode || 'separate',
+            compilation_title: settings.compilationTitle || null,
           },
           transcript: result.transcript,
         }),
@@ -340,12 +347,18 @@ export default function App() {
       const batchId = data.batch_id;
 
       // Initialize inline batch progress on the side under live preview (no modal)
+      const isMerged = settings.renderMode === 'merged';
       setBatchProgress({
         batch_id: batchId,
-        total_clips: settings.selectedClips.length,
+        total_clips: isMerged ? 1 : settings.selectedClips.length,
         current_clip_index: 0,
         overall_status: 'running',
-        clips: settings.selectedClips.map((c, i) => {
+        clips: isMerged ? [{
+          clip_index: 0,
+          title: settings.compilationTitle || (settings.selectedClips[0]?.title_suggestion || settings.selectedClips[0]?.title || 'Highlight Compilation') + ` (${settings.selectedClips.length} Segments)`,
+          status: 'pending',
+          progress_percent: 0,
+        }] : settings.selectedClips.map((c, i) => {
           const base = (c.title_suggestion || c.title || `Clip #${i + 1}`).trim();
           const pfx = settings.titlePrefix || '';
           const sfx = settings.titleSuffix || '';
@@ -608,6 +621,25 @@ export default function App() {
       ...markedClips,
       [clipId]: !markedClips[clipId]
     };
+    setMarkedClips(updated);
+    localStorage.setItem(`marked_clips_${result.video_id}`, JSON.stringify(updated));
+  };
+
+  const toggleAllMarkedClips = (forceSelect?: boolean) => {
+    if (!result?.video_id || !result.clips || result.clips.length === 0) return;
+    const allCurrentlyMarked = result.clips.every(c => !!markedClips[`${c.start_time}_${c.end_time}`]);
+    const shouldSelect = forceSelect !== undefined ? forceSelect : !allCurrentlyMarked;
+
+    const updated: Record<string, boolean> = { ...markedClips };
+    if (shouldSelect) {
+      result.clips.forEach(clip => {
+        updated[`${clip.start_time}_${clip.end_time}`] = true;
+      });
+    } else {
+      result.clips.forEach(clip => {
+        delete updated[`${clip.start_time}_${clip.end_time}`];
+      });
+    }
     setMarkedClips(updated);
     localStorage.setItem(`marked_clips_${result.video_id}`, JSON.stringify(updated));
   };
@@ -2252,88 +2284,90 @@ Transcript:
 
           {/* YouTube input mode */}
           {sourceMode === 'youtube' && (
-            <div className="form-main-input-row">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.form.urlLabel}</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', width: '100%' }}>
+              <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.form.urlLabel}</label>
+              <div className="form-main-input-row" style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
                 <input
                   id="youtube-url-input"
                   type="text"
                   className="form-input"
+                  style={{ flex: 1 }}
                   placeholder={t.form.urlPlaceholder}
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   disabled={loading}
                   required={sourceMode === 'youtube'}
                 />
+                <button
+                  id="analyze-btn"
+                  type="submit"
+                  className="glowing-btn"
+                  disabled={loading || !url.trim()}
+                  style={{ height: '48px', padding: '0 2.5rem', flexShrink: 0 }}
+                >
+                  {loading ? (
+                    <>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="spinner-icon" style={{ animation: 'spin 1s linear infinite' }}>
+                        <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
+                      </svg>
+                      {t.form.processing}
+                    </>
+                  ) : (
+                    <>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                      </svg>
+                      {t.form.hackClips}
+                    </>
+                  )}
+                </button>
               </div>
-              <button
-                id="analyze-btn"
-                type="submit"
-                className="glowing-btn"
-                disabled={loading || !url.trim()}
-                style={{ height: '48px', padding: '0 2.5rem' }}
-              >
-                {loading ? (
-                  <>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="spinner-icon" style={{ animation: 'spin 1s linear infinite' }}>
-                      <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
-                    </svg>
-                    {t.form.processing}
-                  </>
-                ) : (
-                  <>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                      <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                    </svg>
-                    {t.form.hackClips}
-                  </>
-                )}
-              </button>
             </div>
           )}
 
           {/* Google Drive input mode */}
           {sourceMode === 'gdrive' && (
-            <div className="form-main-input-row">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.form.gdriveUrlLabel}</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', width: '100%' }}>
+              <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.form.gdriveUrlLabel}</label>
+              <div className="form-main-input-row" style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
                 <input
                   id="gdrive-url-input"
                   type="text"
                   className="form-input"
+                  style={{ flex: 1 }}
                   placeholder={t.form.gdriveUrlPlaceholder}
                   value={gdriveUrl}
                   onChange={(e) => setGdriveUrl(e.target.value)}
                   disabled={loading}
                   required={sourceMode === 'gdrive'}
                 />
-                <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', lineHeight: 1.3 }}>
-                  💡 {t.form.gdriveNotice}
-                </span>
+                <button
+                  id="analyze-gdrive-btn"
+                  type="submit"
+                  className="glowing-btn"
+                  disabled={loading || !gdriveUrl.trim()}
+                  style={{ height: '48px', padding: '0 2.5rem', flexShrink: 0 }}
+                >
+                  {loading ? (
+                    <>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="spinner-icon" style={{ animation: 'spin 1s linear infinite' }}>
+                        <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
+                      </svg>
+                      {t.form.processing}
+                    </>
+                  ) : (
+                    <>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                      </svg>
+                      {t.form.hackClips}
+                    </>
+                  )}
+                </button>
               </div>
-              <button
-                id="analyze-gdrive-btn"
-                type="submit"
-                className="glowing-btn"
-                disabled={loading || !gdriveUrl.trim()}
-                style={{ height: '48px', padding: '0 2.5rem' }}
-              >
-                {loading ? (
-                  <>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="spinner-icon" style={{ animation: 'spin 1s linear infinite' }}>
-                      <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
-                    </svg>
-                    {t.form.processing}
-                  </>
-                ) : (
-                  <>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                      <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                    </svg>
-                    {t.form.hackClips}
-                  </>
-                )}
-              </button>
+              <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', lineHeight: 1.3, fontWeight: 400 }}>
+                💡 {t.form.gdriveNotice}
+              </span>
             </div>
           )}
 
@@ -4061,9 +4095,35 @@ Transcript:
               </div>
 
               {/* Stats and Exports */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-                <div>
-                  {t.results.showingClipsCount(sortedClips.length, result.clips.length)}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.25rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                  <span>{t.results.showingClipsCount(sortedClips.length, result.clips.length)}</span>
+                  {result.clips && result.clips.length > 0 && (
+                    <button
+                      type="button"
+                      className="action-link-btn mark-all-clips-btn"
+                      onClick={() => toggleAllMarkedClips()}
+                      title={result.clips.every(clip => !!markedClips[`${clip.start_time}_${clip.end_time}`]) ? t.results.unmarkAllClips : t.results.markAllClips}
+                      style={{
+                        background: result.clips.every(clip => !!markedClips[`${clip.start_time}_${clip.end_time}`]) ? 'rgba(239, 68, 68, 0.12)' : 'rgba(168, 85, 247, 0.12)',
+                        border: result.clips.every(clip => !!markedClips[`${clip.start_time}_${clip.end_time}`]) ? '1px solid rgba(239, 68, 68, 0.35)' : '1px solid rgba(168, 85, 247, 0.35)',
+                        color: result.clips.every(clip => !!markedClips[`${clip.start_time}_${clip.end_time}`]) ? '#f87171' : 'var(--primary)',
+                        borderRadius: '5px',
+                        padding: '0.2rem 0.55rem',
+                        fontSize: '0.74rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.3rem',
+                        transition: 'var(--transition-smooth)'
+                      }}
+                    >
+                      {result.clips.every(clip => !!markedClips[`${clip.start_time}_${clip.end_time}`])
+                        ? t.results.unmarkAllClips
+                        : t.results.markAllClips}
+                    </button>
+                  )}
                 </div>
                 <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
                   <div style={{ position: 'relative', display: 'inline-block' }}>
@@ -4468,6 +4528,7 @@ Transcript:
           onStartRender={handleStartBatchRender}
           isRendering={isLaunchingRender}
           onToggleMarkClip={(clip) => toggleMarkedClip(`${clip.start_time}_${clip.end_time}`)}
+          onToggleAllClips={toggleAllMarkedClips}
           batchProgress={batchProgress}
           onDismissProgress={() => {
             if (batchEventSourceRef.current) {

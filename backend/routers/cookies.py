@@ -149,13 +149,11 @@ async def save_youtube_cookies(request: Request):
 @router.get("/api/cookies")
 def get_youtube_cookies_status():
     eff = get_effective_cookies_path()
-    if eff:
+    if eff and eff.exists():
         sample_lines = []
-        cookies_content = ""
         try:
             with open(eff, "r", encoding="utf-8", errors="ignore") as f:
-                cookies_content = f.read()
-                for line in cookies_content.splitlines():
+                for line in f:
                     line = line.strip()
                     if line and not line.startswith("#"):
                         parts = line.split("\t")
@@ -172,7 +170,7 @@ def get_youtube_cookies_status():
             "has_cookies": True,
             "size": eff.stat().st_size,
             "sample_lines": sample_lines,
-            "cookies_content": cookies_content
+            "cookies_content": ""  # Redacted to prevent credential exposure
         }
     return {"exists": False, "has_cookies": False, "size": 0, "sample_lines": [], "cookies_content": ""}
 

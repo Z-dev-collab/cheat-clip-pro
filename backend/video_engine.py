@@ -515,7 +515,14 @@ def transcribe_local_video_file(file_path: Union[str, Path], progress_callback=N
         progress_callback("Running Whisper AI", f"Extracting dialogue from {p.name} with Whisper...", 30)
 
     logger.info(f"Transcribing local file with Whisper: {p}")
-    result = whisper_model.transcribe(str(p), word_timestamps=True, fp16=False, verbose=False)
+    whisper_prompt = "Transkrip video percakapan dalam Bahasa Indonesia atau English."
+    result = whisper_model.transcribe(
+        str(p),
+        word_timestamps=True,
+        fp16=False,
+        verbose=False,
+        initial_prompt=whisper_prompt
+    )
     
     segments = result.get("segments", [])
     transcript_lines = []
@@ -601,8 +608,11 @@ def download_clip_segment(
                         local_source = f
                         break
 
+    clip_duration = max(1.0, end_time - start_time)
+
     if local_source and local_source.exists():
         logger.info(f"Slicing local/gdrive video: {local_source} [{start_time:.2f}s -> {end_time:.2f}s] to {output_path}")
+        slice_timeout = max(300, min(1200, int(clip_duration * 6) + 90))
         slice_cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-ss", str(start_time),
@@ -614,7 +624,7 @@ def download_clip_segment(
             "-movflags", "+faststart",
             str(output_path)
         ]
-        res = subprocess.run(slice_cmd, capture_output=True, text=True, timeout=90)
+        res = subprocess.run(slice_cmd, capture_output=True, text=True, timeout=slice_timeout)
         if output_path.exists() and is_valid_mp4(output_path):
             return str(output_path)
         if output_path.exists():
@@ -633,13 +643,12 @@ def download_clip_segment(
     if not clean_url.startswith("http"):
         clean_url = f"https://www.youtube.com/watch?v={clean_url}"
 
-    clip_duration = max(1.0, end_time - start_time)
     t_start_fmt = format_section_time(start_time)
     t_end_fmt = format_section_time(end_time)
 
-    # Dynamic timeout: Minimum 60s, plus 3s per second of clip duration (max 180s).
-    # Allows fast fallback instead of stalling for 5+ minutes when user internet lags.
-    timeout_sec = min(180, max(60, int(clip_duration * 3) + 40))
+    # Dynamic timeout: Base 300s, plus 5s per second of clip duration (max 1200s / 20 min).
+    # Ensures clips > 1 minute (e.g. 70s, 90s, 120s, 180s) have ample time to download and merge without timing out.
+    timeout_sec = max(300, min(1200, int(clip_duration * 5) + 90))
 
     has_cookies = get_effective_cookies_path() is not None
     # If cookies are present, try with cookies first; if rejected by YouTube (or any reload/bot error), try guest mode.
@@ -717,7 +726,7 @@ def download_clip_segment(
                 video_stream = urls[0]
                 audio_stream = urls[1] if len(urls) > 1 else urls[0]
 
-                trim_timeout = min(150, max(60, int(clip_duration * 2.5) + 30))
+                trim_timeout = max(240, min(900, int(clip_duration * 4.5) + 60))
                 trim_cmd = [
                     "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                     "-reconnect", "1",
@@ -779,7 +788,7 @@ def download_clip_segment(
                 "--no-warnings",
                 clean_url
             ]
-            timeout_720p = min(120, max(50, int(clip_duration * 2) + 30))
+            timeout_720p = max(200, min(600, int(clip_duration * 4) + 60))
             res_720p = subprocess.run(cmd_720p, capture_output=True, text=True, timeout=timeout_720p)
             if res_720p.returncode == 0 and is_valid_mp4(output_path):
                 logger.info(f"Successfully downloaded 720p fallback section ({mode_label}): {output_path} ({output_path.stat().st_size} bytes)")
@@ -822,7 +831,7 @@ def download_clip_segment(
                 "--no-warnings",
                 clean_url
             ]
-            timeout_480p = min(90, max(40, int(clip_duration * 2) + 20))
+            timeout_480p = max(150, min(450, int(clip_duration * 3) + 45))
             res_480p = subprocess.run(cmd_480p, capture_output=True, text=True, timeout=timeout_480p)
             if res_480p.returncode == 0 and is_valid_mp4(output_path):
                 logger.info(f"Successfully downloaded 480p fallback section ({mode_label}): {output_path} ({output_path.stat().st_size} bytes)")
@@ -1061,7 +1070,13 @@ def transcribe_clip_words(
     if whisper_model is not None:
         try:
             logger.info("Running Whisper word-level transcription as fallback...")
-            result = whisper_model.transcribe(video_path, word_timestamps=True, fp16=False)
+            whisper_prompt = "Transkrip video percakapan dalam Bahasa Indonesia atau English."
+            result = whisper_model.transcribe(
+                video_path,
+                word_timestamps=True,
+                fp16=False,
+                initial_prompt=whisper_prompt
+            )
             words = []
             for segment in result.get("segments", []):
                 for w in segment.get("words", []):
@@ -1250,7 +1265,10 @@ def render_title_overlay_png(
     canvas_w: int = 1080,
     canvas_h: int = 1920,
     title_font_size_preset: Optional[str] = None,
-    streamer_preset: Optional[str] = "none"
+    streamer_preset: Optional[str] = "none",
+    title_font_name: Optional[str] = None,
+    title_font_size_px: Optional[int] = None,
+    title_text_case: Optional[str] = None
 ) -> Optional[str]:
     """
     Renders the title with full-color emojis and bold styled typography into a transparent
@@ -1259,6 +1277,8 @@ def render_title_overlay_png(
     if not title_text or title_position == "none":
         return None
 
+    effective_title_font = title_font_name or font_name or "Montserrat"
+    effective_title_case = title_text_case or text_case or "uppercase"
     effective_title_preset = (title_font_size_preset or font_size_preset or "medium").lower()
 
     if effective_title_preset == "small":
@@ -1270,15 +1290,17 @@ def render_title_overlay_png(
 
     # Format Title & Determine Line Count
     formatted_title, title_line_count = wrap_title_smart(
-        apply_text_case(title_text, text_case),
+        apply_text_case(title_text, effective_title_case),
         max_single_len=max_wrap_len
     )
 
     if not formatted_title:
         return None
 
-    # Distinct, calibrated title font sizes based on preset
-    if effective_title_preset == "small":
+    # Distinct, calibrated title font sizes based on preset or explicit px
+    if title_font_size_px and title_font_size_px > 0:
+        title_font_size = int(title_font_size_px)
+    elif effective_title_preset == "small":
         title_font_size = 58 if title_line_count >= 3 else 68
     elif effective_title_preset == "big":
         title_font_size = 106 if title_line_count >= 3 else 124
@@ -1287,7 +1309,7 @@ def render_title_overlay_png(
 
     # Create dummy draw to measure line widths and prevent edge overflow
     temp_draw = ImageDraw.Draw(Image.new("RGBA", (canvas_w, canvas_h)))
-    text_font = get_font(font_name, title_font_size)
+    text_font = get_font(effective_title_font, title_font_size)
     emoji_font = get_emoji_font(int(title_font_size * 0.90))
 
     lines = [l.strip() for l in formatted_title.split("\\N") if l.strip()]
@@ -1311,8 +1333,11 @@ def render_title_overlay_png(
         text_font = get_font(font_name, title_font_size)
         emoji_font = get_emoji_font(int(title_font_size * 0.90))
 
-    # Content boundaries for aspect ratios (Canvas is 1080x1920)
-    if streamer_preset == "split_top_cam":
+    # Content boundaries for aspect ratios
+    if target_aspect_ratio == "16:9_landscape":
+        content_top = 0
+        content_bot = 1080
+    elif streamer_preset == "split_top_cam":
         if target_aspect_ratio == "16:9":
             content_top = 352
             content_bot = 1568
@@ -1340,10 +1365,12 @@ def render_title_overlay_png(
     est_title_h = int(title_line_count * line_step)
 
     # Title Positioning (100% WYSIWYG matching framing preview):
-    # Preview renders at top: `${title_y_percent}%` on 569px height (which is 1080x1920 canvas).
-    # When title_y_percent is provided, directly map to canvas pixels: 1920 * (title_y_percent / 100.0).
-    if title_y_percent is not None:
+    if target_aspect_ratio == "16:9_landscape":
+        effective_title_y_pct = float(title_y_percent) if title_y_percent is not None else (5.5 if title_line_count >= 3 else (6.5 if title_line_count == 2 else 8.0))
+        title_y = max(10, min(1000, int(round(1080 * (effective_title_y_pct / 100.0)))))
+    elif title_y_percent is not None:
         effective_title_y_pct = float(title_y_percent)
+        title_y = max(10, min(1800, int(round(1920 * (effective_title_y_pct / 100.0)))))
     else:
         if streamer_preset == "split_top_cam":
             effective_title_y_pct = 3.5 if title_line_count >= 3 else 4.5
@@ -1355,8 +1382,7 @@ def render_title_overlay_png(
             effective_title_y_pct = 22.6 if title_line_count >= 3 else (24.5 if title_line_count == 2 else 28.8)
         else:  # 9:16
             effective_title_y_pct = 12.0 if title_line_count >= 3 else (14.5 if title_line_count == 2 else 17.0)
-
-    title_y = max(10, min(1800, int(round(1920 * (effective_title_y_pct / 100.0)))))
+        title_y = max(10, min(1800, int(round(1920 * (effective_title_y_pct / 100.0)))))
 
     # Create transparent canvas
     img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
@@ -1428,6 +1454,13 @@ def render_title_overlay_png(
     return output_png_path
 
 
+def escape_ass_text(text: str) -> str:
+    """Escapes special ASS subtitle control characters (curly braces, backslashes) to prevent tag injection."""
+    if not text:
+        return ""
+    return str(text).replace("{", "｛").replace("}", "｝").replace("\\", "＼")
+
+
 def generate_ass_file(
     words: List[Dict[str, Any]],
     style_preset: str,
@@ -1446,7 +1479,11 @@ def generate_ass_file(
     subtitle_center_y_percent: float = 50.0,
     skip_title: bool = False,
     title_font_size_preset: Optional[str] = None,
-    streamer_preset: Optional[str] = "none"
+    streamer_preset: Optional[str] = "none",
+    title_font_name: Optional[str] = None,
+    font_size_px: Optional[int] = None,
+    title_font_size_px: Optional[int] = None,
+    title_text_case: Optional[str] = None
 ) -> str:
     """
     Generates an Advanced SubStation Alpha (.ass) subtitle and title file with karaoke / word-level animation.
@@ -1456,6 +1493,7 @@ def generate_ass_file(
     Supports subtitle_position_mode ('bottom' | 'center') with custom center Y position.
     """
     effective_title_preset = (title_font_size_preset or font_size_preset or "medium").lower()
+    effective_title_case = title_text_case or text_case or "uppercase"
 
     if effective_title_preset == "small":
         max_wrap_len = 24
@@ -1466,32 +1504,59 @@ def generate_ass_file(
 
     # 1. Format Title & Determine Line Count
     if title_text and title_position != "none":
+        sanitized_title = escape_ass_text(apply_text_case(title_text, effective_title_case))
         formatted_title, title_line_count = wrap_title_smart(
-            apply_text_case(title_text, text_case),
+            sanitized_title,
             max_single_len=max_wrap_len
         )
     else:
         formatted_title, title_line_count = "", 1
 
+    is_landscape = (target_aspect_ratio == "16:9_landscape")
+    canvas_w = 1920 if is_landscape else 1080
+    canvas_h = 1080 if is_landscape else 1920
+    center_x = 960 if is_landscape else 540
+
     # 2. Font Sizes based on preset, with automatic scale-down for 3+ line titles
-    # Subtitle font sizes based on font_size_preset
-    if font_size_preset == "small":
-        sub_font_size = 65
-    elif font_size_preset == "big":
-        sub_font_size = 94
-    else:  # medium
-        sub_font_size = 78
+    if is_landscape:
+        if font_size_preset == "small":
+            sub_font_size = 40
+        elif font_size_preset == "big":
+            sub_font_size = 58
+        else:
+            sub_font_size = 48
 
-    # Title font sizes based on effective_title_preset
-    if effective_title_preset == "small":
-        title_font_size = 58 if title_line_count >= 3 else 68
-    elif effective_title_preset == "big":
-        title_font_size = 106 if title_line_count >= 3 else 124
-    else:  # medium
-        title_font_size = 82 if title_line_count >= 3 else 94
+        if effective_title_preset == "small":
+            title_font_size = 38 if title_line_count >= 3 else 44
+        elif effective_title_preset == "big":
+            title_font_size = 64 if title_line_count >= 3 else 74
+        else:
+            title_font_size = 50 if title_line_count >= 3 else 58
+    else:
+        if font_size_preset == "small":
+            sub_font_size = 65
+        elif font_size_preset == "big":
+            sub_font_size = 94
+        else:  # medium
+            sub_font_size = 78
 
-    # 3. Content boundaries for aspect ratios (Canvas is 1080x1920)
-    if streamer_preset == "split_top_cam":
+        if effective_title_preset == "small":
+            title_font_size = 58 if title_line_count >= 3 else 68
+        elif effective_title_preset == "big":
+            title_font_size = 106 if title_line_count >= 3 else 124
+        else:  # medium
+            title_font_size = 82 if title_line_count >= 3 else 94
+
+    if font_size_px and int(font_size_px) > 0:
+        sub_font_size = int(font_size_px)
+    if title_font_size_px and int(title_font_size_px) > 0:
+        title_font_size = int(title_font_size_px)
+
+    # 3. Content boundaries for aspect ratios
+    if is_landscape:
+        content_top = 0
+        content_bot = 1080
+    elif streamer_preset == "split_top_cam":
         if target_aspect_ratio == "16:9":
             content_top = 352
             content_bot = 1568
@@ -1522,10 +1587,12 @@ def generate_ass_file(
     sub_align = 5 if subtitle_position_mode == "center" else 2
 
     # Title Positioning (100% WYSIWYG matching framing preview):
-    # Preview renders at top: `${title_y_percent}%` on 569px height (which is 1080x1920 canvas).
-    # When title_y_percent is provided, directly map to canvas pixels: 1920 * (title_y_percent / 100.0).
-    if title_y_percent is not None:
+    if is_landscape:
+        effective_title_y_pct = float(title_y_percent) if title_y_percent is not None else (5.5 if title_line_count >= 3 else (6.5 if title_line_count == 2 else 8.0))
+        title_y = max(10, min(1000, int(round(1080 * (effective_title_y_pct / 100.0)))))
+    elif title_y_percent is not None:
         effective_title_y_pct = float(title_y_percent)
+        title_y = max(10, min(1800, int(round(1920 * (effective_title_y_pct / 100.0)))))
     else:
         if streamer_preset == "split_top_cam":
             effective_title_y_pct = 3.5 if title_line_count >= 3 else 4.5
@@ -1537,11 +1604,18 @@ def generate_ass_file(
             effective_title_y_pct = 22.6 if title_line_count >= 3 else (24.5 if title_line_count == 2 else 28.8)
         else:  # 9:16
             effective_title_y_pct = 12.0 if title_line_count >= 3 else (14.5 if title_line_count == 2 else 17.0)
-
-    title_y = max(10, min(1800, int(round(1920 * (effective_title_y_pct / 100.0)))))
+        title_y = max(10, min(1800, int(round(1920 * (effective_title_y_pct / 100.0)))))
 
     # Subtitle Positioning:
-    if subtitle_position_mode == "center":
+    if is_landscape:
+        if subtitle_position_mode == "center":
+            sub_y = int(round(1080 * (subtitle_center_y_percent / 100.0)))
+            sub_y = max(40, min(1040, sub_y))
+        else:
+            effective_sub_pct = float(subtitle_y_percent) if subtitle_y_percent is not None else 10.0
+            sub_y = int(round(1080 * (1.0 - (effective_sub_pct / 100.0))))
+            sub_y = max(40, min(1040, sub_y))
+    elif subtitle_position_mode == "center":
         sub_y = int(round(1920 * (subtitle_center_y_percent / 100.0)))
         sub_y = max(content_top + 40, min(content_bot - 40, sub_y))
     else:
@@ -1619,15 +1693,15 @@ def generate_ass_file(
 
     ass_header = f"""[Script Info]
 ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
+PlayResX: {canvas_w}
+PlayResY: {canvas_h}
 ScaledBorderAndShadow: yes
 WrapStyle: 2
 Collisions: Reverse
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: TitleStyle,{font_name},{title_font_size},&H00FFFFFF,&H000000FF,&H00000000,{title_box_back},-1,0,0,0,100,100,0,0,{title_border_style},4.4,2.0,8,40,40,0,1
+Style: TitleStyle,{title_font_name or font_name},{title_font_size},&H00FFFFFF,&H000000FF,&H00000000,{title_box_back},-1,0,0,0,100,100,0,0,{title_border_style},4.4,2.0,8,40,40,0,1
 Style: SubStyle,{font_name},{sub_font_size},{primary_color},&H000000FF,{outline_color},{back_color},-1,0,0,0,100,100,0,0,1,{outline_w},{shadow_w},2,40,40,0,1
 
 [Events]
@@ -1651,7 +1725,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         for line_idx, t_line in enumerate(title_lines):
             line_y = title_y + (line_idx * line_step)
             events.append(
-                f"Dialogue: 1,0:00:00.00,{end_time_str},TitleStyle,,0,0,0,,{{\\q2\\an8\\pos(540,{line_y})}}{t_line}"
+                f"Dialogue: 1,0:00:00.00,{end_time_str},TitleStyle,,0,0,0,,{{\\q2\\an8\\pos({center_x},{line_y})}}{t_line}"
             )
 
     # 4. Add Subtitle Events if captions are enabled (guaranteed ZERO vertical glitch / jumping)
@@ -1662,7 +1736,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             raw_text = clean_caption_text(w.get("word", "").strip())
             if not raw_text:
                 continue
-            w_text = apply_text_case(raw_text, text_case)
+            w_text = escape_ass_text(apply_text_case(raw_text, text_case))
             st = max(0.0, float(w.get("start", 0.0)))
             et = max(st + 0.08, float(w.get("end", st + 0.25)))
             valid_words.append({"word_text": w_text, "start": st, "end": et, "raw": w})
@@ -1742,9 +1816,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         line_parts.append(w_txt)
 
                 styled_line = " ".join(line_parts)
-                # Lock position to sub_y with \q2\an{sub_align}\pos(540, sub_y) (zero vertical jump / collision)
+                # Lock position to sub_y with \q2\an{sub_align}\pos(center_x, sub_y)
                 events.append(
-                    f"Dialogue: 0,{format_ass_timestamp(w_start)},{format_ass_timestamp(w_end)},SubStyle,,0,0,0,,{{\\q2\\an{sub_align}\\pos(540,{sub_y})}}{styled_line}"
+                    f"Dialogue: 0,{format_ass_timestamp(w_start)},{format_ass_timestamp(w_end)},SubStyle,,0,0,0,,{{\\q2\\an{sub_align}\\pos({center_x},{sub_y})}}{styled_line}"
                 )
 
     ass_content = ass_header + "\n".join(events) + "\n"
@@ -2250,7 +2324,7 @@ def build_ffmpeg_filtergraph(
             )
             if background_style == "blurred":
                 filters.append(
-                    f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                    f"[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[bg_blurred][both_split]overlay=0:352[layout_base]"
                 )
             else:
@@ -2270,7 +2344,7 @@ def build_ffmpeg_filtergraph(
             )
             if background_style == "blurred":
                 filters.append(
-                    f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                    f"[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[bg_blurred][both_split]overlay=60:0[layout_base]"
                 )
             else:
@@ -2290,7 +2364,7 @@ def build_ffmpeg_filtergraph(
             )
             if background_style == "blurred":
                 filters.append(
-                    f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                    f"[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[bg_blurred][both_split]overlay=0:150[layout_base]"
                 )
             else:
@@ -2331,7 +2405,7 @@ def build_ffmpeg_filtergraph(
             if background_style == "blurred":
                 filters.append(
                     f"[0:v]split=3[bg_raw][main_raw][pip_raw];"
-                    f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                    f"[bg_raw]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[main_raw]{crop_main}[fg_square];"
                     f"[bg_blurred][fg_square]overlay=0:420[main_base];"
                     f"{pip_crop}"
@@ -2351,7 +2425,7 @@ def build_ffmpeg_filtergraph(
             if background_style == "blurred":
                 filters.append(
                     f"[0:v]split=3[bg_raw][main_raw][pip_raw];"
-                    f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                    f"[bg_raw]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[main_raw]{crop_main}[fg_43];"
                     f"[bg_blurred][fg_43]overlay=0:555[main_base];"
                     f"{pip_crop}"
@@ -2365,13 +2439,23 @@ def build_ffmpeg_filtergraph(
                     f"[main_base][pip_box]overlay=x={pip_x}:y={pip_y}[layout_base]"
                 )
 
+        elif aspect_ratio == "16:9_landscape":
+            crop_main = "crop='min(iw,ih*16/9)':'min(ih,iw*9/16)':'(iw-min(iw,ih*16/9))/2':'(ih-min(ih,iw*9/16))/2',scale=1920:1080"
+            pip_x, pip_y = 1550, 780
+            filters.append(
+                f"[0:v]split=2[main_raw][pip_raw];"
+                f"[main_raw]{crop_main}[main_base];"
+                f"{pip_crop}"
+                f"[main_base][pip_box]overlay=x={pip_x}:y={pip_y}[layout_base]"
+            )
+
         elif aspect_ratio == "16:9":
             crop_main = "crop='min(iw,ih*16/9)':'min(ih,iw*9/16)':'(iw-min(iw,ih*16/9))/2':'(ih-min(ih,iw*9/16))/2',scale=1080:608"
             pip_x, pip_y = 736, 676
             if background_style == "blurred":
                 filters.append(
                     f"[0:v]split=3[bg_raw][main_raw][pip_raw];"
-                    f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                    f"[bg_raw]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[main_raw]{crop_main}[fg_169];"
                     f"[bg_blurred][fg_169]overlay=0:656[main_base];"
                     f"{pip_crop}"
@@ -2423,7 +2507,7 @@ def build_ffmpeg_filtergraph(
         if background_style == "blurred":
             filters.append(
                 f"[0:v]split=2[bg_raw][fg_raw];"
-                f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                f"[bg_raw]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                 f"[fg_raw]{crop_11}[fg_square];"
                 f"[bg_blurred][fg_square]overlay=0:420[layout_base]"
             )
@@ -2443,7 +2527,7 @@ def build_ffmpeg_filtergraph(
         if background_style == "blurred":
             filters.append(
                 f"[0:v]split=2[bg_raw][fg_raw];"
-                f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                f"[bg_raw]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                 f"[fg_raw]{crop_43}[fg_43];"
                 f"[bg_blurred][fg_43]overlay=0:555[layout_base]"
             )
@@ -2451,6 +2535,18 @@ def build_ffmpeg_filtergraph(
             filters.append(
                 f"[0:v]{crop_43},pad=1080:1920:0:555:black[layout_base]"
             )
+        current_v = "[layout_base]"
+
+    elif aspect_ratio == "16:9_landscape":
+        # True 16:9 Landscape (1920x1080)
+        safe_cx = float(face_cx)
+        if 0.46 <= safe_cx <= 0.54:
+            safe_cx = 0.50
+        safe_cx = max(0.15, min(0.85, safe_cx))
+        crop_169_land = f"crop='min(iw,ih*16/9)':'min(ih,iw*9/16)':'max(0,min(iw-ih*16/9,iw*{safe_cx:.3f}-(ih*16/9)/2))':'(ih-min(ih,iw*9/16))/2',scale=1920:1080"
+        filters.append(
+            f"[0:v]{crop_169_land}[layout_base]"
+        )
         current_v = "[layout_base]"
 
     else:  # 16:9 Letterbox
@@ -2463,7 +2559,7 @@ def build_ffmpeg_filtergraph(
         if background_style == "blurred":
             filters.append(
                 f"[0:v]split=2[bg_raw][fg_raw];"
-                f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                f"[bg_raw]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                 f"[fg_raw]{crop_169}[fg_169];"
                 f"[bg_blurred][fg_169]overlay=0:656[layout_base]"
             )
@@ -2477,8 +2573,8 @@ def build_ffmpeg_filtergraph(
     # (If ass_subtitles_path is provided, it contains BOTH the title and subtitles rendered with exact matching fonts)
     if ass_subtitles_path and os.path.exists(ass_subtitles_path):
         raw_ass = str(Path(ass_subtitles_path).resolve()).replace("\\", "/")
-        escaped_ass = raw_ass.replace("'", "'\\''").replace(":", "\\:")
-        if FONTS_DIR.exists() and any(FONTS_DIR.glob("*.ttf")):
+        escaped_ass = raw_ass.replace(":", "\\:").replace("'", "'\\''")
+        if FONTS_DIR.exists() and (any(FONTS_DIR.glob("*.ttf")) or any(FONTS_DIR.glob("*.otf")) or any(FONTS_DIR.glob("*.woff*"))):
             raw_fonts = str(FONTS_DIR.resolve()).replace("\\", "/")
             escaped_fonts = raw_fonts.replace("'", "'\\''").replace(":", "\\:")
             sub_filter = f"{current_v}subtitles=filename='{escaped_ass}':fontsdir='{escaped_fonts}'[v_final]"
@@ -2490,11 +2586,12 @@ def build_ffmpeg_filtergraph(
         # Fallback drawtext if no ASS was generated
         clean_title = title_text.replace("'", "").replace(":", "-").replace('"', "").strip()
         if title_y_percent is not None:
-            y_pos = int(round(1920 * (float(title_y_percent) / 100.0)))
+            canvas_h = 1080 if aspect_ratio == "16:9_landscape" else 1920
+            y_pos = int(round(canvas_h * (float(title_y_percent) / 100.0)))
         elif streamer_preset == "split_top_cam":
             y_pos = int(round(1920 * 0.045))
         else:
-            y_pos = 345 if aspect_ratio == "1:1" else (480 if aspect_ratio in ["4:3", "9:16"] else 581)
+            y_pos = 80 if aspect_ratio == "16:9_landscape" else (345 if aspect_ratio == "1:1" else (480 if aspect_ratio in ["4:3", "9:16"] else 581))
         box_style = "box=0"
         title_filter = (
             f"{current_v}drawtext=text='{clean_title}':fontsize=60:fontcolor=white:"
@@ -2641,8 +2738,9 @@ def render_clip_to_mp4(
             input_idx_counter += 1
             extra_input_args.extend(["-i", str(watermark_image_path)])
 
-            # Canvas width is 1080. Calculate watermark width based on percentage (0-500%)
-            wm_w = max(16, min(5400, int(1080 * (float(watermark_size) / 100.0))))
+            # Canvas width is 1920 for landscape or 1080 for vertical. Calculate watermark width based on percentage (0-500%)
+            canvas_w = 1920 if aspect_ratio == "16:9_landscape" else 1080
+            wm_w = max(16, min(5400, int(canvas_w * (float(watermark_size) / 100.0))))
             wm_prep = f"[{wm_idx}:v]format=rgba,colorchannelmixer=aa={wm_opacity:.2f},scale={wm_w}:-1[wm_proc]"
             filter_chains.append(wm_prep)
 
@@ -2754,13 +2852,26 @@ def render_clip_to_mp4(
     if not shutil.which("ffmpeg"):
         raise RuntimeError("FFmpeg is not installed or not found in system PATH. Please install FFmpeg (e.g. 'winget install Gyan.FFmpeg') and restart your terminal.")
 
-    logger.info(f"Rendering final vertical clip to {output_mp4_path} with {chosen_encoder_name} (Selection: {hardware_accel}, BGM: {bgm_enabled}, Watermark: {watermark_enabled})...")
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
-    if res.returncode != 0:
-        logger.warning(f"Hardware encoder ({chosen_encoder_name}) failed (code {res.returncode}): {res.stderr[:250] if res.stderr else ''}")
+    dur = max(1.0, float(clip_duration))
+    # Dynamic timeouts scaled to clip duration (e.g. 60s -> 600s / 10m, 120s -> 1080s / 18m, 180s -> 1560s / 26m)
+    render_timeout = max(360, min(2400, int(dur * 8) + 120))
+    cpu_render_timeout = max(480, min(3000, int(dur * 12) + 180))
+
+    logger.info(f"Rendering final vertical clip to {output_mp4_path} with {chosen_encoder_name} (Duration: {dur:.1f}s, Timeout: {render_timeout}s, Selection: {hardware_accel}, BGM: {bgm_enabled}, Watermark: {watermark_enabled})...")
+
+    res = None
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=render_timeout)
+    except subprocess.TimeoutExpired:
+        logger.warning(f"Hardware encoder ({chosen_encoder_name}) timed out after {render_timeout}s.")
+        res = None
+
+    if res is None or res.returncode != 0:
+        err_msg_initial = res.stderr[:250] if (res and res.stderr) else f"Timed out after {render_timeout}s"
+        logger.warning(f"Hardware encoder ({chosen_encoder_name}) failed or timed out: {err_msg_initial}")
         # Automatic fallback to universal CPU encoding (libx264) if chosen hardware encoder fails
         if chosen_encoder_name != "libx264":
-            logger.info("Retrying render with universal multi-threaded CPU encoder (libx264)...")
+            logger.info(f"Retrying render with universal multi-threaded CPU encoder (libx264, timeout: {cpu_render_timeout}s)...")
             cpu_cmd = [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                 "-i", str(video_path),
@@ -2775,7 +2886,18 @@ def render_clip_to_mp4(
                 "-shortest",
                 str(output_mp4_path)
             ]
-            res_cpu = subprocess.run(cpu_cmd, capture_output=True, text=True, timeout=240)
+            res_cpu = None
+            try:
+                res_cpu = subprocess.run(cpu_cmd, capture_output=True, text=True, timeout=cpu_render_timeout)
+            except subprocess.TimeoutExpired:
+                logger.error(f"FFmpeg CPU fallback timed out after {cpu_render_timeout}s.")
+                if os.path.exists(output_mp4_path):
+                    try:
+                        os.unlink(output_mp4_path)
+                    except Exception:
+                        pass
+                raise RuntimeError(f"FFmpeg rendering timed out after {cpu_render_timeout}s for clip of duration {dur:.1f}s.")
+
             if res_cpu.returncode == 0 and os.path.exists(output_mp4_path) and is_valid_mp4(output_mp4_path):
                 logger.info(f"Successfully rendered with CPU fallback: {output_mp4_path}")
                 return str(output_mp4_path)
@@ -2785,7 +2907,7 @@ def render_clip_to_mp4(
                         os.unlink(output_mp4_path)
                     except Exception:
                         pass
-                err_text = res_cpu.stderr or res.stderr or "Unknown FFmpeg error"
+                err_text = res_cpu.stderr if (res_cpu and res_cpu.stderr) else (res.stderr if (res and res.stderr) else "Unknown FFmpeg error")
                 if "moov atom not found" in err_text.lower():
                     raise RuntimeError("FFmpeg rendering failed: Source video segment is incomplete ('moov atom not found'). Please retry rendering this clip.")
                 logger.error(f"FFmpeg CPU fallback also failed: {err_text}")
@@ -2796,6 +2918,8 @@ def render_clip_to_mp4(
                     os.unlink(output_mp4_path)
                 except Exception:
                     pass
+            if res is None:
+                raise RuntimeError(f"FFmpeg rendering timed out after {render_timeout}s for clip of duration {dur:.1f}s.")
             err_text = res.stderr or "Unknown FFmpeg error"
             if "moov atom not found" in err_text.lower():
                 raise RuntimeError("FFmpeg rendering failed: Source video segment is incomplete ('moov atom not found'). Please retry rendering this clip.")

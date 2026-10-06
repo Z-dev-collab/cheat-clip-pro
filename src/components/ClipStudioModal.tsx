@@ -36,7 +36,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
   const initialClips = markedClips.length > 0 ? markedClips : allClips.slice(0, 3);
   
   const [selectedClips, setSelectedClips] = useState<ViralClip[]>(initialClips);
-  const [aspectRatio, setAspectRatio] = useState<AspectRatioOption>('1:1');
+  const [aspectRatio, setAspectRatio] = useState<AspectRatioOption>('9:16');
   const [backgroundStyle, setBackgroundStyle] = useState<BackgroundStyle>('black');
   const [enableFaceTracking, setEnableFaceTracking] = useState<boolean>(true);
   const [streamerPreset, setStreamerPreset] = useState<StreamerPreset>('none');
@@ -51,6 +51,8 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
 
   if (!isOpen) return null;
 
+  const availableClips = markedClips.length > 0 ? markedClips : allClips;
+
   const toggleClip = (clip: ViralClip) => {
     if (selectedClips.some(c => c.start_time === clip.start_time && c.end_time === clip.end_time)) {
       if (selectedClips.length > 1) {
@@ -58,6 +60,14 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
       }
     } else {
       setSelectedClips([...selectedClips, clip]);
+    }
+  };
+
+  const handleToggleAll = () => {
+    if (selectedClips.length === availableClips.length) {
+      setSelectedClips(availableClips.slice(0, 1));
+    } else {
+      setSelectedClips([...availableClips]);
     }
   };
 
@@ -106,9 +116,10 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
     return text;
   };
 
-  // Preview dimensions for the 9:16 smartphone mock
-  const phoneWidth = 240;
-  const phoneHeight = (phoneWidth * 16) / 9; // 426.6px
+  // Preview dimensions for the wireframe mock
+  const isLandscape = aspectRatio === '16:9_landscape';
+  const phoneWidth = isLandscape ? 380 : 240;
+  const phoneHeight = isLandscape ? 214 : (240 * 16) / 9; // 426.6px
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -182,10 +193,20 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                   <span className="aspect-name">{t.studio.ratio169}</span>
                   <span className="aspect-sub">{t.studio.ratio169Sub}</span>
                 </button>
+
+                <button
+                  type="button"
+                  className={`aspect-card-btn ${aspectRatio === '16:9_landscape' ? 'active' : ''}`}
+                  onClick={() => setAspectRatio('16:9_landscape')}
+                >
+                  <div className="aspect-icon-box ratio-169landscape"></div>
+                  <span className="aspect-name">{t.studio.ratio169Landscape || '16:9 Landscape'}</span>
+                  <span className="aspect-sub">{t.studio.ratio169LandscapeSub || 'True 1920×1080'}</span>
+                </button>
               </div>
 
               {/* Background Style when bars are active */}
-              {aspectRatio !== '9:16' && (
+              {aspectRatio !== '9:16' && aspectRatio !== '16:9_landscape' && (
                 <div className="studio-sub-toggle">
                   <span className="sub-toggle-label">{t.studio.marginBackdrop}</span>
                   <div className="toggle-pill-group">
@@ -557,9 +578,29 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
 
             {/* 5. Selected Clips Picker */}
             <div className="studio-section">
-              <label className="studio-label">
-                <span>{t.studio.batchChecklist(selectedClips.length, (markedClips.length > 0 ? markedClips : allClips).length)}</span>
-              </label>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem' }}>
+                <label className="studio-label" style={{ margin: 0 }}>
+                  <span>{t.studio.batchChecklist(selectedClips.length, availableClips.length)}</span>
+                </label>
+                {availableClips.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleToggleAll}
+                    style={{
+                      background: selectedClips.length === availableClips.length ? 'rgba(239, 68, 68, 0.12)' : 'rgba(168, 85, 247, 0.15)',
+                      border: selectedClips.length === availableClips.length ? '1px solid rgba(239, 68, 68, 0.35)' : '1px solid rgba(168, 85, 247, 0.4)',
+                      color: selectedClips.length === availableClips.length ? '#f87171' : 'var(--primary, #a855f7)',
+                      borderRadius: '5px',
+                      padding: '0.18rem 0.5rem',
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {selectedClips.length === availableClips.length ? t.studio.unmarkAllClips : t.studio.markAllClips}
+                  </button>
+                )}
+              </div>
               <div className="batch-clips-list">
                 {(markedClips.length > 0 ? markedClips : allClips).map((clip, i) => {
                   const isSelected = selectedClips.some(
@@ -597,15 +638,15 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
           <div className="studio-preview-col">
             <h4 className="preview-heading">{t.studio.previewWireframe}</h4>
             <div
-              className="phone-wireframe-container"
+              className={`phone-wireframe-container ${isLandscape ? 'is-landscape' : ''}`}
               style={{ width: `${phoneWidth}px`, height: `${phoneHeight}px` }}
             >
               {/* Background (Black or Blurred) */}
-              <div className={`wireframe-bg ${backgroundStyle === 'blurred' && aspectRatio !== '9:16' ? 'blurred-ambient' : 'black-bg'}`}>
+              <div className={`wireframe-bg ${backgroundStyle === 'blurred' && aspectRatio !== '9:16' && aspectRatio !== '16:9_landscape' ? 'blurred-ambient' : 'black-bg'}`}>
                 <div className={`wireframe-single-layout ${streamerPreset === 'split_top_cam' ? 'split-active' : ''}`}>
                   {streamerPreset === 'split_top_cam' && (
                     <>
-                      <div className={`wireframe-split-cam-box aspect-${aspectRatio.replace(':', '')}`}>
+                      <div className={`wireframe-split-cam-box aspect-${aspectRatio.replace(':', '').replace('_', '')}`}>
                         <div className="wireframe-facecam-skeleton">
                           <div className="skeleton-grid-mesh"></div>
                           <div className="skeleton-reticle">
@@ -635,9 +676,9 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                     </>
                   )}
 
-                  <div className={`wireframe-content-box aspect-${aspectRatio.replace(':', '')} ${streamerPreset === 'split_top_cam' ? 'split-mode' : ''}`}>
+                  <div className={`wireframe-content-box aspect-${aspectRatio.replace(':', '').replace('_', '')} ${streamerPreset === 'split_top_cam' ? 'split-mode' : ''}`}>
                     <div className="wireframe-content-inner">
-                      <span className="content-ratio-tag">{aspectRatio}</span>
+                      <span className="content-ratio-tag">{aspectRatio === '16:9_landscape' ? '16:9 Landscape' : aspectRatio}</span>
                       {streamerPreset === 'pip_corner' && (
                         <div className="wireframe-pip-box">
                           <div className="wireframe-pip-skeleton">
@@ -666,6 +707,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                     style={{
                       top: (() => {
                         if (streamerPreset === 'split_top_cam') return '24px';
+                        if (aspectRatio === '16:9_landscape') return '14px';
                         if (aspectRatio === '1:1') return '58px'; // above 93px top edge
                         if (aspectRatio === '4:3') return '88px'; // above 123px top edge
                         if (aspectRatio === '16:9') return '110px'; // above 145px top edge
@@ -697,6 +739,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                     className={`wireframe-caption-overlay style-${captionStyle}`}
                     style={{
                       bottom: (() => {
+                        if (aspectRatio === '16:9_landscape') return '14px';
                         if (aspectRatio === '1:1') return '58px';
                         if (aspectRatio === '4:3') return '88px';
                         if (aspectRatio === '16:9') return '110px';
