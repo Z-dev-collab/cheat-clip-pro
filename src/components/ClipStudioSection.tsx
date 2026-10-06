@@ -309,7 +309,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     try {
       const font = new FontFace(name, `url(${url})`);
       font.load().then(loaded => {
-        document.fonts.add(loaded);
+        (document.fonts as Set<FontFace>).add(loaded);
       }).catch(err => console.warn(`Font '${name}' load error:`, err));
     } catch (e) {
       console.warn('FontFace API error:', e);
