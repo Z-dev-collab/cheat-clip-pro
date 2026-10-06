@@ -31,8 +31,9 @@ Make sure you have the following installed:
      *(Close and reopen your terminal after installing so Windows recognizes them)*
    * **macOS (Terminal):**
      ```bash
-     brew install ffmpeg yt-dlp
+     brew install ffmpeg-full yt-dlp
      ```
+      `ffmpeg-full` is required for the libass subtitle filter used by rendered captions.
    * **Linux:**
      ```bash
      sudo apt update && sudo apt install ffmpeg
@@ -145,15 +146,23 @@ Cheat Clip PRO uses Google's AI to find the best viral moments for free:
     *(Then close and reopen your terminal)*
   * **Mac (Terminal):**
     ```bash
-    brew install ffmpeg yt-dlp
+    brew install ffmpeg-full yt-dlp
     ```
   * Or install directly via Python: `pip install yt-dlp`
 
-### 2. "Sign in to confirm you're not a bot"
+### 2. `No such filter: 'subtitles'`
+* **Cause:** FFmpeg was installed without the libass subtitle filter.
+* **Fix (macOS):**
+  ```bash
+  brew install ffmpeg-full
+  ```
+  Restart the backend after installation. The app automatically prefers Homebrew's subtitle-capable `ffmpeg-full` binary.
+
+### 3. "Sign in to confirm you're not a bot"
 * **Cause:** YouTube blocks video downloads if too many requests are sent without logging in.
 * **Fix:** Click the 🍪 **Cookies** button in the top navigation bar, export your YouTube cookies using a free browser extension (like *Get cookies.txt locally*), and paste them into the app.
 
-### 3. Does this work on AMD graphics cards and Mac?
+### 4. Does this work on AMD graphics cards and Mac?
 * **Yes!** Cheat Clip PRO automatically supports:
   * **NVIDIA** (`h264_nvenc`)
   * **AMD** (`h264_amf` on Radeon GPUs & Ryzen CPUs)
