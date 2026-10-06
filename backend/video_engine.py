@@ -9,6 +9,7 @@ import subprocess
 import unicodedata
 import math
 import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Union
 from PIL import Image, ImageDraw, ImageFont
@@ -3049,7 +3050,6 @@ def extract_clip_frame(video_url: str, video_id: str, timestamp: float = 0.0) ->
 
     # 4. Instant high-res thumbnail fallback (guarantees frame preview NEVER gets stuck)
     try:
-        import urllib.request
         for thumb_url in [
             f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg",
             f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
