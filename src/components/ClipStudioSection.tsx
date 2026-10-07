@@ -194,6 +194,17 @@ export interface StudioPreferences {
   titleDuration?: TitleDurationOption;
   originalAudioVolume?: number;
   hardwareAccel?: HardwareAccelOption;
+  titleYPercent?: number;
+  subtitleYPercent?: number;
+  subtitleCenterYPercent?: number;
+  isCustomTitleY?: boolean;
+  bgmVolume?: number;
+  hookSfxVolume?: number;
+  renderMode?: 'separate' | 'merged';
+  fileNamePrefix?: string;
+  fileNameSuffix?: string;
+  titlePrefix?: string;
+  titleSuffix?: string;
 }
 
 export const DEFAULT_STUDIO_PREFS: Required<StudioPreferences> = {
@@ -216,6 +227,17 @@ export const DEFAULT_STUDIO_PREFS: Required<StudioPreferences> = {
   titleDuration: 'entire',
   originalAudioVolume: 100,
   hardwareAccel: 'auto',
+  titleYPercent: 17,
+  subtitleYPercent: 21,
+  subtitleCenterYPercent: 50,
+  isCustomTitleY: false,
+  bgmVolume: 25,
+  hookSfxVolume: 100,
+  renderMode: 'separate',
+  fileNamePrefix: '',
+  fileNameSuffix: '',
+  titlePrefix: '',
+  titleSuffix: '',
 };
 
 function getSavedStudioPreferences(): Partial<StudioPreferences> {
@@ -253,8 +275,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [enableFaceTracking, setEnableFaceTracking] = useState<boolean>(() => getSavedStudioPreferences().enableFaceTracking ?? DEFAULT_STUDIO_PREFS.enableFaceTracking);
   const [streamerPreset, setStreamerPreset] = useState<StreamerPreset>(() => getSavedStudioPreferences().streamerPreset ?? DEFAULT_STUDIO_PREFS.streamerPreset);
   const [facecamPosition, setFacecamPosition] = useState<FacecamPosition>(() => getSavedStudioPreferences().facecamPosition ?? DEFAULT_STUDIO_PREFS.facecamPosition);
-  const [titlePrefix, setTitlePrefix] = useState<string>('');
-  const [titleSuffix, setTitleSuffix] = useState<string>('');
+  const [titlePrefix, setTitlePrefix] = useState<string>(() => getSavedStudioPreferences().titlePrefix ?? DEFAULT_STUDIO_PREFS.titlePrefix);
+  const [titleSuffix, setTitleSuffix] = useState<string>(() => getSavedStudioPreferences().titleSuffix ?? DEFAULT_STUDIO_PREFS.titleSuffix);
   const [customClipTitles, setCustomClipTitles] = useState<Record<string, string>>({});
   const [titlePosition, setTitlePosition] = useState<TitlePosition>(() => getSavedStudioPreferences().titlePosition ?? DEFAULT_STUDIO_PREFS.titlePosition);
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(() => getSavedStudioPreferences().captionStyle ?? DEFAULT_STUDIO_PREFS.captionStyle);
@@ -272,7 +294,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [titleTextCase, setTitleTextCase] = useState<TextCaseOption>(() => getSavedStudioPreferences().titleTextCase ?? DEFAULT_STUDIO_PREFS.titleTextCase);
 
   // Multi-Segment Merged Render Mode
-  const [renderMode, setRenderMode] = useState<'separate' | 'merged'>('separate');
+  const [renderMode, setRenderMode] = useState<'separate' | 'merged'>(() => getSavedStudioPreferences().renderMode ?? DEFAULT_STUDIO_PREFS.renderMode);
   const [compilationTitle, setCompilationTitle] = useState<string>('');
 
   // Custom Font Library State
@@ -291,15 +313,15 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [isSubFontDragging, setIsSubFontDragging] = useState<boolean>(false);
   const titleFontInputRef = useRef<HTMLInputElement | null>(null);
   const subtitleFontInputRef = useRef<HTMLInputElement | null>(null);
-  const [fileNamePrefix, setFileNamePrefix] = useState<string>('');
-  const [fileNameSuffix, setFileNameSuffix] = useState<string>('');
+  const [fileNamePrefix, setFileNamePrefix] = useState<string>(() => getSavedStudioPreferences().fileNamePrefix ?? DEFAULT_STUDIO_PREFS.fileNamePrefix);
+  const [fileNameSuffix, setFileNameSuffix] = useState<string>(() => getSavedStudioPreferences().fileNameSuffix ?? DEFAULT_STUDIO_PREFS.fileNameSuffix);
 
   // Manual Up/Down positioning for All Formats
-  const [titleYPercent, setTitleYPercent] = useState<number>(17);
-  const [subtitleYPercent, setSubtitleYPercent] = useState<number>(21);
+  const [titleYPercent, setTitleYPercent] = useState<number>(() => getSavedStudioPreferences().titleYPercent ?? DEFAULT_STUDIO_PREFS.titleYPercent);
+  const [subtitleYPercent, setSubtitleYPercent] = useState<number>(() => getSavedStudioPreferences().subtitleYPercent ?? DEFAULT_STUDIO_PREFS.subtitleYPercent);
   const [subtitlePositionMode, setSubtitlePositionMode] = useState<SubtitlePositionMode>(() => getSavedStudioPreferences().subtitlePositionMode ?? DEFAULT_STUDIO_PREFS.subtitlePositionMode);
-  const [subtitleCenterYPercent, setSubtitleCenterYPercent] = useState<number>(50);
-  const [isCustomTitleY, setIsCustomTitleY] = useState<boolean>(false);
+  const [subtitleCenterYPercent, setSubtitleCenterYPercent] = useState<number>(() => getSavedStudioPreferences().subtitleCenterYPercent ?? DEFAULT_STUDIO_PREFS.subtitleCenterYPercent);
+  const [isCustomTitleY, setIsCustomTitleY] = useState<boolean>(() => getSavedStudioPreferences().isCustomTitleY ?? DEFAULT_STUDIO_PREFS.isCustomTitleY);
   const [titleDuration, setTitleDuration] = useState<TitleDurationOption>(() => getSavedStudioPreferences().titleDuration ?? DEFAULT_STUDIO_PREFS.titleDuration);
   const [isClearingTemp, setIsClearingTemp] = useState<boolean>(false);
   const [tempClearMsg, setTempClearMsg] = useState<string>('');
@@ -313,7 +335,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [bgmFileName, setBgmFileName] = useState<string>('');
   const [bgmFilePath, setBgmFilePath] = useState<string>('');
   const [bgmAudioUrl, setBgmAudioUrl] = useState<string>('');
-  const [bgmVolume, setBgmVolume] = useState<number>(25);
+  const [bgmVolume, setBgmVolume] = useState<number>(() => getSavedStudioPreferences().bgmVolume ?? DEFAULT_STUDIO_PREFS.bgmVolume);
   const [bgmDuration, setBgmDuration] = useState<number>(0);
   const [bgmStartOffset, setBgmStartOffset] = useState<number>(0);
   const [isBgmPlaying, setIsBgmPlaying] = useState<boolean>(false);
@@ -325,7 +347,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [hookSfxFileName, setHookSfxFileName] = useState<string>('');
   const [hookSfxFilePath, setHookSfxFilePath] = useState<string>('');
   const [hookSfxAudioUrl, setHookSfxAudioUrl] = useState<string>('');
-  const [hookSfxVolume, setHookSfxVolume] = useState<number>(100);
+  const [hookSfxVolume, setHookSfxVolume] = useState<number>(() => getSavedStudioPreferences().hookSfxVolume ?? DEFAULT_STUDIO_PREFS.hookSfxVolume);
   const [isHookSfxPlaying, setIsHookSfxPlaying] = useState<boolean>(false);
   const [isUploadingHookSfx, setIsUploadingHookSfx] = useState<boolean>(false);
   const [isHookSfxDragging, setIsHookSfxDragging] = useState<boolean>(false);
@@ -1378,6 +1400,17 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       titleDuration,
       originalAudioVolume,
       hardwareAccel,
+      titleYPercent,
+      subtitleYPercent,
+      subtitleCenterYPercent,
+      isCustomTitleY,
+      bgmVolume,
+      hookSfxVolume,
+      renderMode,
+      fileNamePrefix,
+      fileNameSuffix,
+      titlePrefix,
+      titleSuffix,
     };
     try {
       localStorage.setItem(STUDIO_PREFS_KEY, JSON.stringify(prefs));
@@ -1404,6 +1437,17 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     titleDuration,
     originalAudioVolume,
     hardwareAccel,
+    titleYPercent,
+    subtitleYPercent,
+    subtitleCenterYPercent,
+    isCustomTitleY,
+    bgmVolume,
+    hookSfxVolume,
+    renderMode,
+    fileNamePrefix,
+    fileNameSuffix,
+    titlePrefix,
+    titleSuffix,
   ]);
 
   const handleResetToDefaults = () => {
@@ -1427,6 +1471,17 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     setTitleDuration(DEFAULT_STUDIO_PREFS.titleDuration);
     setOriginalAudioVolume(DEFAULT_STUDIO_PREFS.originalAudioVolume);
     setHardwareAccel(DEFAULT_STUDIO_PREFS.hardwareAccel);
+    setTitleYPercent(DEFAULT_STUDIO_PREFS.titleYPercent);
+    setSubtitleYPercent(DEFAULT_STUDIO_PREFS.subtitleYPercent);
+    setSubtitleCenterYPercent(DEFAULT_STUDIO_PREFS.subtitleCenterYPercent);
+    setIsCustomTitleY(DEFAULT_STUDIO_PREFS.isCustomTitleY);
+    setBgmVolume(DEFAULT_STUDIO_PREFS.bgmVolume);
+    setHookSfxVolume(DEFAULT_STUDIO_PREFS.hookSfxVolume);
+    setRenderMode(DEFAULT_STUDIO_PREFS.renderMode);
+    setFileNamePrefix(DEFAULT_STUDIO_PREFS.fileNamePrefix);
+    setFileNameSuffix(DEFAULT_STUDIO_PREFS.fileNameSuffix);
+    setTitlePrefix(DEFAULT_STUDIO_PREFS.titlePrefix);
+    setTitleSuffix(DEFAULT_STUDIO_PREFS.titleSuffix);
     handleResetTitlePosition();
     handleResetSubtitlePosition();
     try {

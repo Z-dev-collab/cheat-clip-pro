@@ -79,29 +79,35 @@ def normalize_transcript(fetched_data) -> List[dict]:
 
 def prioritize_transcripts(transcripts: list) -> list:
     """
-    Sorts transcript tracks ensuring Indonesian (id) and English (en) are strictly prioritized
-    over all other languages (preventing unintended Arabic, Russian, or translated tracks):
-    1. Indonesian manual tracks ('id', 'in', 'id-id')
-    2. Indonesian auto-generated tracks
-    3. English manual tracks ('en', 'en-us', 'en-gb')
-    4. English auto-generated tracks
-    5. Native ASR generated track in video's original spoken language
-    6. Other manual original tracks
+    Sorts transcript tracks ensuring the video's authentic original spoken language is prioritized
+    over foreign/translated tracks:
+    1. If YouTube provides an auto-generated track (is_generated=True), its language code is
+       the authentic native spoken language of the video.
+       - A manual human track matching that native language is highest priority (rank 0).
+       - The native auto-generated ASR track is rank 1.
+    2. If no auto-generated track exists, prioritize manual tracks before generated tracks.
     """
+    native_asr_lang = None
+    for t in transcripts:
+        if getattr(t, 'is_generated', False):
+            code = (getattr(t, 'language_code', '') or '').lower().split('-')[0]
+            if code:
+                native_asr_lang = code
+                break
+
     def rank_track(t):
         code = (getattr(t, 'language_code', '') or '').lower()
+        base_code = code.split('-')[0]
         is_gen = getattr(t, 'is_generated', False)
-        # Indonesian
-        if code in ('id', 'in', 'id-id') or code.startswith('id-'):
-            return 0 if not is_gen else 1
-        # English
-        if code in ('en', 'en-us', 'en-gb', 'en-ca') or code.startswith('en-'):
+
+        if native_asr_lang:
+            if base_code == native_asr_lang:
+                return 0 if not is_gen else 1
+            # If not matching native audio language, manual comes before auto
             return 2 if not is_gen else 3
-        # Native ASR track
-        if is_gen:
-            return 4
-        # Other manual track
-        return 5
+        else:
+            # Fallback when no ASR track: manual tracks always beat auto-generated
+            return 0 if not is_gen else 1
 
     return sorted(transcripts, key=rank_track)
 
