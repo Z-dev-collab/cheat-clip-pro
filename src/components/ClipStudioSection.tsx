@@ -172,6 +172,63 @@ const ClipRenderErrorBox: React.FC<{ errorMessage: string; t: any; onRetry?: () 
   );
 };
 
+export const STUDIO_PREFS_KEY = 'cheat_clip_studio_preferences';
+
+export interface StudioPreferences {
+  aspectRatio?: AspectRatioOption;
+  backgroundStyle?: BackgroundStyle;
+  enableFaceTracking?: boolean;
+  streamerPreset?: StreamerPreset;
+  facecamPosition?: FacecamPosition;
+  titlePosition?: TitlePosition;
+  captionStyle?: CaptionStyle;
+  captionFont?: CaptionFont;
+  titleFont?: CaptionFont;
+  fontSize?: FontSizeOption;
+  fontSizePx?: number;
+  titleFontSize?: FontSizeOption;
+  titleFontSizePx?: number;
+  textCase?: TextCaseOption;
+  titleTextCase?: TextCaseOption;
+  subtitlePositionMode?: SubtitlePositionMode;
+  titleDuration?: TitleDurationOption;
+  originalAudioVolume?: number;
+  hardwareAccel?: HardwareAccelOption;
+}
+
+export const DEFAULT_STUDIO_PREFS: Required<StudioPreferences> = {
+  aspectRatio: '9:16',
+  backgroundStyle: 'black',
+  enableFaceTracking: true,
+  streamerPreset: 'none',
+  facecamPosition: 'auto',
+  titlePosition: 'auto',
+  captionStyle: 'viral_pop',
+  captionFont: 'Outfit',
+  titleFont: 'Outfit',
+  fontSize: 'medium',
+  fontSizePx: 75,
+  titleFontSize: 'medium',
+  titleFontSizePx: 75,
+  textCase: 'uppercase',
+  titleTextCase: 'uppercase',
+  subtitlePositionMode: 'bottom',
+  titleDuration: 'entire',
+  originalAudioVolume: 100,
+  hardwareAccel: 'auto',
+};
+
+function getSavedStudioPreferences(): Partial<StudioPreferences> {
+  try {
+    const raw = localStorage.getItem(STUDIO_PREFS_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as Partial<StudioPreferences>;
+  } catch (e) {
+    console.warn('Failed to parse studio preferences from localStorage:', e);
+    return {};
+  }
+}
+
 export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   videoUrl,
   videoId,
@@ -191,25 +248,28 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [selectedClips, setSelectedClips] = useState<ViralClip[]>(markedClips);
   const [previewClipIndex, setPreviewClipIndex] = useState<number>(0);
 
-  const [aspectRatio, setAspectRatio] = useState<AspectRatioOption>('9:16');
-  const [backgroundStyle, setBackgroundStyle] = useState<BackgroundStyle>('black');
-  const [enableFaceTracking, setEnableFaceTracking] = useState<boolean>(true);
-  const [streamerPreset, setStreamerPreset] = useState<StreamerPreset>('none');
-  const [facecamPosition, setFacecamPosition] = useState<FacecamPosition>('auto');
+  const [aspectRatio, setAspectRatio] = useState<AspectRatioOption>(() => getSavedStudioPreferences().aspectRatio ?? DEFAULT_STUDIO_PREFS.aspectRatio);
+  const [backgroundStyle, setBackgroundStyle] = useState<BackgroundStyle>(() => getSavedStudioPreferences().backgroundStyle ?? DEFAULT_STUDIO_PREFS.backgroundStyle);
+  const [enableFaceTracking, setEnableFaceTracking] = useState<boolean>(() => getSavedStudioPreferences().enableFaceTracking ?? DEFAULT_STUDIO_PREFS.enableFaceTracking);
+  const [streamerPreset, setStreamerPreset] = useState<StreamerPreset>(() => getSavedStudioPreferences().streamerPreset ?? DEFAULT_STUDIO_PREFS.streamerPreset);
+  const [facecamPosition, setFacecamPosition] = useState<FacecamPosition>(() => getSavedStudioPreferences().facecamPosition ?? DEFAULT_STUDIO_PREFS.facecamPosition);
   const [titlePrefix, setTitlePrefix] = useState<string>('');
   const [titleSuffix, setTitleSuffix] = useState<string>('');
   const [customClipTitles, setCustomClipTitles] = useState<Record<string, string>>({});
-  const [titlePosition, setTitlePosition] = useState<TitlePosition>('auto');
-  const [captionStyle, setCaptionStyle] = useState<CaptionStyle>('viral_pop');
-  const [lastActiveCaptionStyle, setLastActiveCaptionStyle] = useState<CaptionStyle>('viral_pop');
-  const [captionFont, setCaptionFont] = useState<CaptionFont>('Outfit');
-  const [titleFont, setTitleFont] = useState<CaptionFont>('Outfit');
-  const [fontSize, setFontSize] = useState<FontSizeOption>('medium');
-  const [fontSizePx, setFontSizePx] = useState<number>(75);
-  const [titleFontSize, setTitleFontSize] = useState<FontSizeOption>('medium');
-  const [titleFontSizePx, setTitleFontSizePx] = useState<number>(75);
-  const [textCase, setTextCase] = useState<TextCaseOption>('uppercase');
-  const [titleTextCase, setTitleTextCase] = useState<TextCaseOption>('uppercase');
+  const [titlePosition, setTitlePosition] = useState<TitlePosition>(() => getSavedStudioPreferences().titlePosition ?? DEFAULT_STUDIO_PREFS.titlePosition);
+  const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(() => getSavedStudioPreferences().captionStyle ?? DEFAULT_STUDIO_PREFS.captionStyle);
+  const [lastActiveCaptionStyle, setLastActiveCaptionStyle] = useState<CaptionStyle>(() => {
+    const cap = getSavedStudioPreferences().captionStyle ?? DEFAULT_STUDIO_PREFS.captionStyle;
+    return cap !== 'none' ? cap : 'viral_pop';
+  });
+  const [captionFont, setCaptionFont] = useState<CaptionFont>(() => getSavedStudioPreferences().captionFont ?? DEFAULT_STUDIO_PREFS.captionFont);
+  const [titleFont, setTitleFont] = useState<CaptionFont>(() => getSavedStudioPreferences().titleFont ?? DEFAULT_STUDIO_PREFS.titleFont);
+  const [fontSize, setFontSize] = useState<FontSizeOption>(() => getSavedStudioPreferences().fontSize ?? DEFAULT_STUDIO_PREFS.fontSize);
+  const [fontSizePx, setFontSizePx] = useState<number>(() => getSavedStudioPreferences().fontSizePx ?? DEFAULT_STUDIO_PREFS.fontSizePx);
+  const [titleFontSize, setTitleFontSize] = useState<FontSizeOption>(() => getSavedStudioPreferences().titleFontSize ?? DEFAULT_STUDIO_PREFS.titleFontSize);
+  const [titleFontSizePx, setTitleFontSizePx] = useState<number>(() => getSavedStudioPreferences().titleFontSizePx ?? DEFAULT_STUDIO_PREFS.titleFontSizePx);
+  const [textCase, setTextCase] = useState<TextCaseOption>(() => getSavedStudioPreferences().textCase ?? DEFAULT_STUDIO_PREFS.textCase);
+  const [titleTextCase, setTitleTextCase] = useState<TextCaseOption>(() => getSavedStudioPreferences().titleTextCase ?? DEFAULT_STUDIO_PREFS.titleTextCase);
 
   // Multi-Segment Merged Render Mode
   const [renderMode, setRenderMode] = useState<'separate' | 'merged'>('separate');
@@ -237,16 +297,16 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   // Manual Up/Down positioning for All Formats
   const [titleYPercent, setTitleYPercent] = useState<number>(17);
   const [subtitleYPercent, setSubtitleYPercent] = useState<number>(21);
-  const [subtitlePositionMode, setSubtitlePositionMode] = useState<SubtitlePositionMode>('bottom');
+  const [subtitlePositionMode, setSubtitlePositionMode] = useState<SubtitlePositionMode>(() => getSavedStudioPreferences().subtitlePositionMode ?? DEFAULT_STUDIO_PREFS.subtitlePositionMode);
   const [subtitleCenterYPercent, setSubtitleCenterYPercent] = useState<number>(50);
   const [isCustomTitleY, setIsCustomTitleY] = useState<boolean>(false);
-  const [titleDuration, setTitleDuration] = useState<TitleDurationOption>('entire');
+  const [titleDuration, setTitleDuration] = useState<TitleDurationOption>(() => getSavedStudioPreferences().titleDuration ?? DEFAULT_STUDIO_PREFS.titleDuration);
   const [isClearingTemp, setIsClearingTemp] = useState<boolean>(false);
   const [tempClearMsg, setTempClearMsg] = useState<string>('');
   const [showClearConfirmModal, setShowClearConfirmModal] = useState<boolean>(false);
 
   // Original Voice Audio Boost (0% - 200%, default 100%)
-  const [originalAudioVolume, setOriginalAudioVolume] = useState<number>(100);
+  const [originalAudioVolume, setOriginalAudioVolume] = useState<number>(() => getSavedStudioPreferences().originalAudioVolume ?? DEFAULT_STUDIO_PREFS.originalAudioVolume);
 
   // Background Music (BGM) state
   const [bgmEnabled, setBgmEnabled] = useState<boolean>(false);
@@ -287,7 +347,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const phoneContainerRef = useRef<HTMLDivElement | null>(null);
 
   // Hardware acceleration / Video Encoder state
-  const [hardwareAccel, setHardwareAccel] = useState<HardwareAccelOption>('auto');
+  const [hardwareAccel, setHardwareAccel] = useState<HardwareAccelOption>(() => getSavedStudioPreferences().hardwareAccel ?? DEFAULT_STUDIO_PREFS.hardwareAccel);
   const [hardwareInfo, setHardwareInfo] = useState<HardwareAccelInfo | null>(null);
 
   useEffect(() => {
@@ -1296,6 +1356,86 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     setSubtitleCenterYPercent(defaults.subCenterY);
   };
 
+  // Automatically persist studio customization preferences to localStorage
+  useEffect(() => {
+    const prefs: StudioPreferences = {
+      aspectRatio,
+      backgroundStyle,
+      enableFaceTracking,
+      streamerPreset,
+      facecamPosition,
+      titlePosition,
+      captionStyle,
+      captionFont,
+      titleFont,
+      fontSize,
+      fontSizePx,
+      titleFontSize,
+      titleFontSizePx,
+      textCase,
+      titleTextCase,
+      subtitlePositionMode,
+      titleDuration,
+      originalAudioVolume,
+      hardwareAccel,
+    };
+    try {
+      localStorage.setItem(STUDIO_PREFS_KEY, JSON.stringify(prefs));
+    } catch (e) {
+      console.warn('Failed to persist studio preferences to localStorage:', e);
+    }
+  }, [
+    aspectRatio,
+    backgroundStyle,
+    enableFaceTracking,
+    streamerPreset,
+    facecamPosition,
+    titlePosition,
+    captionStyle,
+    captionFont,
+    titleFont,
+    fontSize,
+    fontSizePx,
+    titleFontSize,
+    titleFontSizePx,
+    textCase,
+    titleTextCase,
+    subtitlePositionMode,
+    titleDuration,
+    originalAudioVolume,
+    hardwareAccel,
+  ]);
+
+  const handleResetToDefaults = () => {
+    setAspectRatio(DEFAULT_STUDIO_PREFS.aspectRatio);
+    setBackgroundStyle(DEFAULT_STUDIO_PREFS.backgroundStyle);
+    setEnableFaceTracking(DEFAULT_STUDIO_PREFS.enableFaceTracking);
+    setStreamerPreset(DEFAULT_STUDIO_PREFS.streamerPreset);
+    setFacecamPosition(DEFAULT_STUDIO_PREFS.facecamPosition);
+    setTitlePosition(DEFAULT_STUDIO_PREFS.titlePosition);
+    setCaptionStyle(DEFAULT_STUDIO_PREFS.captionStyle);
+    setLastActiveCaptionStyle(DEFAULT_STUDIO_PREFS.captionStyle);
+    setCaptionFont(DEFAULT_STUDIO_PREFS.captionFont);
+    setTitleFont(DEFAULT_STUDIO_PREFS.titleFont);
+    setFontSize(DEFAULT_STUDIO_PREFS.fontSize);
+    setFontSizePx(DEFAULT_STUDIO_PREFS.fontSizePx);
+    setTitleFontSize(DEFAULT_STUDIO_PREFS.titleFontSize);
+    setTitleFontSizePx(DEFAULT_STUDIO_PREFS.titleFontSizePx);
+    setTextCase(DEFAULT_STUDIO_PREFS.textCase);
+    setTitleTextCase(DEFAULT_STUDIO_PREFS.titleTextCase);
+    setSubtitlePositionMode(DEFAULT_STUDIO_PREFS.subtitlePositionMode);
+    setTitleDuration(DEFAULT_STUDIO_PREFS.titleDuration);
+    setOriginalAudioVolume(DEFAULT_STUDIO_PREFS.originalAudioVolume);
+    setHardwareAccel(DEFAULT_STUDIO_PREFS.hardwareAccel);
+    handleResetTitlePosition();
+    handleResetSubtitlePosition();
+    try {
+      localStorage.removeItem(STUDIO_PREFS_KEY);
+    } catch (e) {
+      console.warn('Failed to clear studio preferences from localStorage:', e);
+    }
+  };
+
   const handleLaunch = () => {
     const enrichedSelectedClips = selectedClips.map(c => {
       const key = `${c.start_time}_${c.end_time}`;
@@ -1385,28 +1525,64 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           </div>
         </div>
 
-        {/* Clip preview switcher */}
-        {allClips.length > 1 && (
-          <div className="preview-clip-picker-bar">
-            <span className="preview-picker-label">{t.studio.previewClip}</span>
-            <select
-              className="preview-clip-select"
-              value={previewClipIndex}
-              onChange={e => setPreviewClipIndex(Number(e.target.value))}
-            >
-              {allClips.map((clip, idx) => {
-                const clipKey = `${clip.start_time}_${clip.end_time}`;
-                const custom = customClipTitles[clipKey];
-                const displayT = (custom !== undefined && custom.trim()) ? custom.trim() : (clip.title_suggestion || clip.title);
-                return (
-                  <option key={idx} value={idx}>
-                    #{idx + 1}: {displayT} ({Math.round(clip.end_time - clip.start_time)}s)
-                  </option>
-                );
-              })}
-            </select>
-          </div>
-        )}
+        <div className="studio-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={handleResetToDefaults}
+            className="studio-reset-defaults-btn"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              padding: '0.4rem 0.85rem',
+              borderRadius: '8px',
+              fontSize: '0.75rem',
+              fontWeight: 600,
+              background: 'rgba(255, 255, 255, 0.05)',
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              color: '#94a3b8',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease',
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.color = '#f87171';
+              e.currentTarget.style.borderColor = 'rgba(248, 113, 113, 0.4)';
+              e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)';
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.color = '#94a3b8';
+              e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.12)';
+              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+            }}
+            title={t.studio.resetToDefaultsTooltip || 'Reset all settings to default values'}
+          >
+            <span>↺</span>
+            <span>{t.studio.resetToDefaults || 'Reset to Defaults'}</span>
+          </button>
+
+          {/* Clip preview switcher */}
+          {allClips.length > 1 && (
+            <div className="preview-clip-picker-bar">
+              <span className="preview-picker-label">{t.studio.previewClip}</span>
+              <select
+                className="preview-clip-select"
+                value={previewClipIndex}
+                onChange={e => setPreviewClipIndex(Number(e.target.value))}
+              >
+                {allClips.map((clip, idx) => {
+                  const clipKey = `${clip.start_time}_${clip.end_time}`;
+                  const custom = customClipTitles[clipKey];
+                  const displayT = (custom !== undefined && custom.trim()) ? custom.trim() : (clip.title_suggestion || clip.title);
+                  return (
+                    <option key={idx} value={idx}>
+                      #{idx + 1}: {displayT} ({Math.round(clip.end_time - clip.start_time)}s)
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Main Studio Grid: Controls (Left) + Real Image Live Preview (Right) */}

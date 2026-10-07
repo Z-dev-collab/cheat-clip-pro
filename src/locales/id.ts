@@ -301,6 +301,8 @@ export const id: Translations = {
     heading: "Cheat Clip Auto Clipper",
     subtext: "Tata letak video real-time, tipografi subtitle dinamis, dan ekspor 1080x1920 batch berakselerasi GPU",
     previewClip: "👁️ Pratinjau Klip:",
+    resetToDefaults: "↺ Reset ke Default",
+    resetToDefaultsTooltip: "Kembalikan semua pengaturan Clip Studio (kanvas, subtitle, font, posisi, akselerasi hardware) ke setelan awal",
     canvasTitle: "📐 Kanvas & Rasio Aspek",
     canvasBadge: "Kanvas 1080×1920",
     canvasBadgeVertical: "Wadah Vertikal 9:16",

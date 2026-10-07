@@ -299,6 +299,8 @@ export const en = {
     heading: "Cheat Clip Auto Clipper",
     subtext: "Real-time video layout framing, dynamic subtitle typography, and batch GPU-accelerated 1080x1920 export",
     previewClip: "👁️ Previewing Clip:",
+    resetToDefaults: "↺ Reset to Defaults",
+    resetToDefaultsTooltip: "Reset all Clip Studio settings (canvas, typography, fonts, positioning, hardware accel) to default values",
     canvasTitle: "📐 Canvas & Inner Aspect Ratio",
     canvasBadge: "1080×1920 Canvas",
     canvasBadgeVertical: "9:16 Vertical Container",
