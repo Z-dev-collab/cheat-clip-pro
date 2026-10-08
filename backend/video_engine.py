@@ -342,7 +342,7 @@ def get_yt_dlp_cookies_args() -> List[str]:
     return []
 
 
-def get_yt_dlp_base_cmd(include_cookies: bool = True) -> List[str]:
+def get_yt_dlp_base_cmd(include_cookies: bool = True, force_ipv4: bool = True) -> List[str]:
     """
     Returns base command for yt-dlp with JavaScript runtime, player extractor args, and cookies.
 
@@ -355,6 +355,11 @@ def get_yt_dlp_base_cmd(include_cookies: bool = True) -> List[str]:
     "Failed to download video clip segment" for every fallback method. Running the
     already-installed module has no extraction step and is far more reliable.
     Falls back to the standalone exe only when the module is not importable.
+
+    ``force_ipv4`` defaults to True (historical behaviour) but MUST be disableable:
+    on IPv6-preferred networks YouTube answers IPv4 requests with
+    "Sign in to confirm you're not a bot" while the same call over IPv6 succeeds.
+    Callers that hit a bot-check should retry with ``force_ipv4=False``.
     """
     cmd: Optional[List[str]] = None
     try:
@@ -382,8 +387,9 @@ def get_yt_dlp_base_cmd(include_cookies: bool = True) -> List[str]:
     # by allowing yt-dlp to fall back from default/tv_downgraded to web_embedded and ios client APIs.
     cmd.extend([
         "--extractor-args", "youtube:player_client=default,web_embedded,ios",
-        "--force-ipv4"
     ])
+    if force_ipv4:
+        cmd.append("--force-ipv4")
 
     if include_cookies:
         eff = get_effective_cookies_path()
@@ -391,6 +397,336 @@ def get_yt_dlp_base_cmd(include_cookies: bool = True) -> List[str]:
             logger.info(f"Using YouTube cookies from: {eff}")
             cmd.extend(["--cookies", str(eff)])
     return cmd
+
+
+def _is_youtube_botcheck(stderr: str) -> bool:
+    """True when yt-dlp output is YouTube's bot-verification wall."""
+    low = (stderr or "").lower()
+    return (
+        "sign in to confirm you" in low
+        or "not a bot" in low
+        or "confirm you’re not a bot" in low
+    )
+
+
+def download_youtube_audio(
+    video_url: str,
+    output_dir: Union[str, Path],
+    live_from_start: bool = False,
+    max_seconds: Optional[int] = None,
+    timeout_sec: int = 2400,
+    progress_callback=None,
+) -> Optional[str]:
+    """
+    Downloads ONLY the audio track (bestaudio) of a video or live broadcast.
+
+    Used as a fallback transcript source when YouTube subtitles are unavailable
+    — most notably for LIVE and recently-completed (post-live) broadcasts, where
+    YouTube has not generated captions yet. The returned file (m4a/webm/opus)
+    is fed straight to the local Whisper model via `transcribe_local_video_file`.
+
+    `live_from_start=True` makes yt-dlp pull a live broadcast from its very
+    beginning instead of only the live edge. `max_seconds` caps the recording
+    length (best-effort via --download-sections) so multi-hour streams stay
+    bounded. Returns None when nothing usable could be downloaded.
+    """
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    token = f"{int(time.time())}_{os.getpid()}"
+    out_tmpl = str(out_dir / f"ytaudio_{token}.%(ext)s")
+
+    base_cmd = get_yt_dlp_base_cmd(include_cookies=True)
+    cmd = [
+        *base_cmd,
+        "-f", "bestaudio/best",
+        "--no-playlist",
+        "--no-warnings",
+        "--newline",
+        "--progress-template",
+        "download:%(progress._percent_str)s|%(progress._downloaded_bytes_str)s|%(progress._total_bytes_str)s|%(progress._speed_str)s|%(progress._eta_str)s",
+        "-o", out_tmpl,
+    ]
+    if live_from_start:
+        cmd += ["--live-from-start"]
+    if max_seconds and max_seconds > 0:
+        cmd += ["--download-sections", f"*0-{int(max_seconds)}"]
+    cmd.append(video_url)
+
+    logger.info(
+        f"Audio-only fallback download (live_from_start={live_from_start}, "
+        f"max={max_seconds}s): {video_url}"
+    )
+    deadline = time.time() + timeout_sec
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+    )
+    try:
+        for line in iter(proc.stdout.readline if proc.stdout else lambda: '', ''):
+            if time.time() > deadline:
+                logger.warning("Audio-only download exceeded time budget; aborting.")
+                proc.kill()
+                break
+            clean_line = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', (line or '').strip())
+            if clean_line.startswith("download:") and progress_callback:
+                parts = clean_line[len("download:"):].split("|")
+                if len(parts) >= 5:
+                    pct_raw = re.sub(r'[^0-9.]', '', parts[0]) or "0"
+                    try:
+                        pct_val = float(pct_raw)
+                    except Exception:
+                        pct_val = 0.0
+                    try:
+                        progress_callback(
+                            "Whisper Fallback",
+                            f"Downloading audio for local transcription... {pct_val:.0f}%",
+                            min(60, 30 + int(pct_val * 0.3)),
+                        )
+                    except Exception:
+                        pass
+        try:
+            proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Audio-only download loop error: {exc}")
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+    files = [
+        p for p in out_dir.glob(f"ytaudio_{token}.*")
+        if p.is_file() and p.stat().st_size > 0 and not p.name.endswith(".part")
+    ]
+    if not files:
+        # yt-dlp may still be finalizing (or was cut off) leaving only a .part.
+        # A .part is still playable audio, so salvage the largest one.
+        partials = [
+            p for p in out_dir.glob(f"ytaudio_{token}.*.part")
+            if p.is_file() and p.stat().st_size > 0
+        ]
+        if partials:
+            src = max(partials, key=lambda p: p.stat().st_size)
+            salvaged = src.with_suffix("")  # drop the trailing .part
+            try:
+                if salvaged.exists():
+                    salvaged.unlink()
+                src.replace(salvaged)
+                files = [salvaged]
+                logger.info(f"Salvaged partial audio download: {salvaged}")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"Could not salvage partial audio {src}: {exc}")
+    if not files:
+        logger.warning("Audio-only fallback produced no usable file.")
+        return None
+    audio_path = max(files, key=lambda p: p.stat().st_size)
+    logger.info(
+        f"Audio-only fallback downloaded: {audio_path} ({audio_path.stat().st_size} bytes)"
+    )
+    return str(audio_path)
+
+
+def _resolve_live_stream_urls(url: str, timeout: int = 60) -> List[str]:
+    """Resolve the playable (video[,audio]) stream URLs of a live broadcast via yt-dlp -g.
+
+    Retries without ``--force-ipv4`` when YouTube answers the IPv4 request with a
+    bot-check (common on IPv6-preferred networks).
+    """
+    last_err = ""
+    for force_ipv4 in (True, False):
+        base = get_yt_dlp_base_cmd(include_cookies=True, force_ipv4=force_ipv4)
+        cmd = base + ["-g", "-f", "b/bv*+ba", "--no-warnings", url]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        if res.returncode == 0:
+            urls = [
+                ln.strip() for ln in (res.stdout or "").splitlines()
+                if ln.strip().startswith("http")
+            ]
+            if urls:
+                return urls
+        last_err = (res.stderr or "").strip()
+        if force_ipv4 and _is_youtube_botcheck(last_err):
+            logger.warning("Live stream resolve hit a bot-check over IPv4 — retrying over IPv6...")
+            continue
+        break
+    raise RuntimeError(last_err[:300] or "yt-dlp could not resolve the live stream URL")
+
+
+LIVE_SEGMENT_SECONDS = 5  # YouTube live HLS segment length (720 segs = 60 min DVR window)
+
+
+def _pick_broadcast_file(out_dir: Path, token: str) -> Optional[Path]:
+    """
+    Returns the largest finalized ``livemedia_<token>.*`` download, salvaging a
+    ``.part`` file when the download was interrupted (a partial MP4 is usually
+    still playable).
+    """
+    candidates = [
+        p for p in out_dir.glob(f"livemedia_{token}.*")
+        if p.is_file() and p.stat().st_size > 0 and not p.name.endswith(".part")
+    ]
+    if candidates:
+        media_path = max(candidates, key=lambda p: p.stat().st_size)
+        if is_valid_mp4(media_path):
+            return media_path
+    parts = [
+        p for p in out_dir.glob(f"livemedia_{token}.*.part")
+        if p.is_file() and p.stat().st_size > 0
+    ]
+    if parts:
+        part = max(parts, key=lambda p: p.stat().st_size)
+        salvaged = part.with_suffix("")  # drop the trailing ".part"
+        try:
+            if salvaged.exists():
+                salvaged.unlink()
+            part.rename(salvaged)
+            if is_valid_mp4(salvaged):
+                logger.warning(f"Salvaged partial broadcast download: {salvaged}")
+                return salvaged
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Could not salvage partial download {part}: {exc}")
+    return None
+
+
+def capture_youtube_live_media(
+    video_url: str,
+    output_dir: Union[str, Path],
+    is_live: bool = True,
+    max_seconds: int = 1800,
+    back_offset_seconds: float = 0.0,
+    timeout_sec: int = 1800,
+    duration_hint: float = 0.0,
+    progress_callback=None,
+) -> Optional[str]:
+    """
+    Captures a bounded media window from a LIVE or recently-completed (post-live)
+    YouTube broadcast into a local MP4, so the normal local pipeline (offline
+    Whisper transcription + local FFmpeg clip slicing / rendering) can process it.
+
+    Why this exists: YouTube exposes no captions for live / just-ended streams,
+    so the usual subtitle pipeline fails and analysis becomes impossible.
+    Capturing the media locally sidesteps subtitles entirely AND makes the
+    resulting clips renderable (they are sliced from this local file instead of
+    a URL whose live edge keeps moving).
+
+    Strategy (fastest first):
+      A. LIVE DVR grab — resolve the HLS manifest and stream-copy the most
+         recent ``max_seconds`` with FFmpeg ``-live_start_index``. Works for
+         live broadcasts and, while the manifest is still up, for recently
+         ended ones.
+      B. yt-dlp download — for a finished VOD, download the last
+         ``max_seconds`` via ``--download-sections`` (or the whole stream,
+         bounded by ``timeout_sec``, when the duration is unknown).
+
+    ``back_offset_seconds`` shifts the captured window further behind the live
+    edge (0 = most recent window). Returns the local file path, or None.
+    """
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    token = f"{int(time.time())}_{os.getpid()}"
+    out_path = out_dir / f"livemedia_{token}.mp4"
+    max_seconds = max(30, int(max_seconds or 1800))
+
+    def notify(detail: str, pct: int):
+        if progress_callback:
+            try:
+                progress_callback("Capturing Broadcast", detail, pct)
+            except Exception:
+                pass
+
+    # ── Path A: live DVR grab (fast stream copy) ─────────────────────────────
+    try:
+        stream_urls = _resolve_live_stream_urls(video_url)
+    except Exception as exc:  # noqa: BLE001
+        logger.info(f"Could not resolve a live stream URL (will try download path): {exc}")
+        stream_urls = []
+
+    if stream_urls and any(".m3u8" in u for u in stream_urls):
+        try:
+            notify("Rewinding into the live DVR window...", 32)
+            start_index = -int(round((max_seconds + back_offset_seconds) / LIVE_SEGMENT_SECONDS))
+            if start_index > -3:
+                start_index = -3
+            cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-rw_timeout", "15000000"]
+            for u in stream_urls:
+                cmd += ["-live_start_index", str(start_index), "-i", u]
+            cmd += ["-t", str(max_seconds)]
+            # Map video+audio from the first stream; when yt-dlp resolved a
+            # separate audio URL, take audio from it instead (the first input is
+            # then video-only). Always map both so a single muxed input keeps its
+            # audio track (otherwise Whisper gets a silent video).
+            if len(stream_urls) > 1:
+                cmd += ["-map", "0:v:0?", "-map", "1:a:0?"]
+            else:
+                cmd += ["-map", "0:v:0?", "-map", "0:a:0?"]
+            cmd += ["-c", "copy", "-avoid_negative_ts", "make_zero",
+                    "-movflags", "+faststart", str(out_path)]
+            logger.info(
+                f"Capturing live media (DVR, {max_seconds}s from index {start_index}): {video_url}"
+            )
+            notify(f"Capturing the last ~{max_seconds // 60} min of the live stream...", 40)
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec)
+            if out_path.exists() and is_valid_mp4(out_path) and out_path.stat().st_size > 0:
+                logger.info(f"Live media captured: {out_path} ({out_path.stat().st_size} bytes)")
+                return str(out_path)
+            logger.warning(
+                f"Live DVR capture failed (rc={res.returncode}): {(res.stderr or '')[:250]}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Live DVR capture error: {exc}")
+
+    # ── Path B: yt-dlp download (post-live VOD, or live fallback) ────────────
+    for force_ipv4 in (True, False):
+        try:
+            notify("Downloading broadcast media for offline transcription...", 40)
+            out_tmpl = str(out_dir / f"livemedia_{token}.%(ext)s")
+            cmd = [
+                *get_yt_dlp_base_cmd(include_cookies=True, force_ipv4=force_ipv4),
+                "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
+                "--merge-output-format", "mp4",
+                "-N", "4",
+                "--socket-timeout", "20",
+                "--fragment-retries", "5",
+                "--retries", "5",
+                "--no-playlist",
+                "--no-warnings",
+                "-o", out_tmpl,
+            ]
+            if not is_live and duration_hint and duration_hint > max_seconds + 5:
+                start_sec = int(duration_hint - max_seconds)
+                cmd += ["--download-sections", f"*{start_sec}-{int(duration_hint)}"]
+            elif is_live:
+                cmd += ["--live-from-start"]
+            cmd.append(video_url)
+            logger.info(
+                f"Downloading broadcast media via yt-dlp (is_live={is_live}, "
+                f"duration_hint={duration_hint}, force_ipv4={force_ipv4}): {video_url}"
+            )
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec)
+            media_path = _pick_broadcast_file(out_dir, token)
+            if media_path:
+                logger.info(f"Broadcast media downloaded: {media_path} ({media_path.stat().st_size} bytes)")
+                return str(media_path)
+            logger.warning(
+                f"yt-dlp broadcast download failed (rc={res.returncode}): {(res.stderr or '')[:250]}"
+            )
+            if force_ipv4 and _is_youtube_botcheck(res.stderr or ""):
+                logger.warning("Broadcast download hit a bot-check over IPv4 — retrying over IPv6...")
+                continue
+            break
+        except subprocess.TimeoutExpired:
+            logger.warning(f"Broadcast media download timed out after {timeout_sec}s")
+            media_path = _pick_broadcast_file(out_dir, token)
+            if media_path:
+                logger.info(f"Using partially downloaded broadcast media: {media_path}")
+                return str(media_path)
+            break
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"yt-dlp broadcast download error: {exc}")
+            break
+
+    logger.warning("Could not capture any media for this live/post-live broadcast.")
+    return None
 
 
 def is_valid_mp4(file_path: Union[str, Path]) -> bool:

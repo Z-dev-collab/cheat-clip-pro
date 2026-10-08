@@ -560,7 +560,7 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          video_url: url || `https://www.youtube.com/watch?v=${result.video_id}`,
+          video_url: result.video_url || url || `https://www.youtube.com/watch?v=${result.video_id}`,
           video_id: result.video_id,
           clips: settings.selectedClips,
           settings: {

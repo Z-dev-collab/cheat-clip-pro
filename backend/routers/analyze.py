@@ -15,6 +15,7 @@ from pathlib import Path
 from backend.config import (
     TEMP_DIR,
     UPLOADS_DIR,
+    capture_youtube_live_media,
     compute_audio_energy_heatmap,
     get_video_file_metadata,
     logger,
@@ -69,6 +70,12 @@ from backend.utils.text import (
 )
 
 router = APIRouter(tags=["Analyze"])
+
+# How much of a live / recently-ended broadcast to capture locally for the
+# offline Whisper fallback (seconds). 1800s (30 min) keeps transcription quick
+# while still covering a typical highlight window; the YouTube DVR window is
+# 60 min, so this always fits.
+LIVE_FALLBACK_SECONDS = 1800
 
 
 @router.get("/api/health")
@@ -788,20 +795,109 @@ async def analyze_video(request: AnalyzeRequest):
                             "message": "Mock mode — using sample transcript."
                         })
                     else:
+                        # ── Offline Whisper fallback for live / post-live ──────
+                        # YouTube exposes no captions for a live or just-ended
+                        # broadcast, so instead of dead-ending we capture the
+                        # broadcast media locally and transcribe it offline with
+                        # Whisper. The captured file is then served so the clip
+                        # renders (and the player) work from it too.
                         if is_live or live_status in ('is_live', 'is_upcoming', 'post_live'):
                             yield _sse({
-                                "error": (
-                                    "No subtitles could be retrieved because this video is currently live, "
-                                    "upcoming, or recently completed (post-live processing). Subtitles are only "
-                                    "available once the live stream ends and YouTube finishes processing the video. "
-                                    "You can upload custom subtitles manually to analyze this video."
+                                "step": 3,
+                                "step_progress": 30,
+                                "overall_progress": 56,
+                                "stage": "Live Fallback",
+                                "detail": (
+                                    "No captions are available for a live/recently-ended broadcast. "
+                                    "Capturing the broadcast locally and transcribing it offline with Whisper AI..."
                                 ),
-                                "status": 400
+                                "message": "No captions found — capturing broadcast audio for offline Whisper transcription..."
+                            })
+
+                            captured_path = None
+                            try:
+                                captured_path = await asyncio.to_thread(
+                                    capture_youtube_live_media,
+                                    canonical_url,
+                                    UPLOADS_DIR,
+                                    is_live,
+                                    LIVE_FALLBACK_SECONDS,
+                                    0.0,
+                                    1800,
+                                    duration,
+                                    progress_callback,
+                                )
+                            except Exception as cap_exc:  # noqa: BLE001
+                                logger.warning(f"Broadcast capture failed: {cap_exc}")
+
+                            if not captured_path:
+                                yield _sse({
+                                    "error": (
+                                        "No subtitles could be retrieved for this live/recently-ended broadcast, "
+                                        "and its media could not be captured for offline transcription. Please try "
+                                        "again shortly, or upload custom subtitles (.srt/.txt) to analyze this video."
+                                    ),
+                                    "status": 400
+                                })
+                                return
+
+                            # Recompute duration from the captured file when unknown
+                            try:
+                                cap_meta = await asyncio.to_thread(get_video_file_metadata, captured_path)
+                                if (not duration) and cap_meta.get("duration"):
+                                    duration = cap_meta["duration"]
+                            except Exception:  # noqa: BLE001
+                                pass
+
+                            # Transcribe the captured broadcast offline with Whisper
+                            try:
+                                task2 = asyncio.create_task(
+                                    asyncio.to_thread(transcribe_local_video_file, captured_path, progress_callback)
+                                )
+                                while not task2.done():
+                                    try:
+                                        evt = await asyncio.wait_for(progress_queue.get(), timeout=0.2)
+                                        yield _sse(evt)
+                                    except asyncio.TimeoutError:
+                                        pass
+                                while not progress_queue.empty():
+                                    yield _sse(progress_queue.get_nowait())
+                                transcript_lines = await task2
+                            except Exception as whisper_exc:  # noqa: BLE001
+                                yield _sse({
+                                    "error": f"Offline Whisper transcription of the broadcast failed: {whisper_exc}",
+                                    "status": 500
+                                })
+                                return
+
+                            if not transcript_lines:
+                                yield _sse({
+                                    "error": (
+                                        "The captured broadcast audio contained no detectable speech. "
+                                        "Upload custom subtitles (.srt/.txt) to analyze this video."
+                                    ),
+                                    "status": 400
+                                })
+                                return
+
+                            # Serve the captured file so clips render from it locally.
+                            # Keep source_type "youtube" so history/thumbnails still
+                            # key off the YouTube video_id; the player and the render
+                            # pipeline both prefer video_url, which now points at the
+                            # locally captured broadcast.
+                            video_url = f"/api/video/{Path(captured_path).name}"
+                            yield _sse({
+                                "step": 3,
+                                "step_progress": 100,
+                                "overall_progress": 70,
+                                "stage": "Subtitles Ready",
+                                "detail": f"Offline Whisper transcribed {len(transcript_lines)} dialogue segments from the captured broadcast.",
+                                "message": f"Broadcast transcribed offline — {len(transcript_lines)} lines ready."
                             })
                         else:
                             msg = e.detail if isinstance(e, HTTPException) else str(e)
                             yield _sse({"error": msg, "status": 400})
-                        return
+                            return
 
         # Estimate duration from transcript if missing
         if duration == 0.0 and transcript_lines:
