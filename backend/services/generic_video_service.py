@@ -41,6 +41,52 @@ _IS_WINDOWS = sys.platform.startswith("win")
 _CREATE_NO_WINDOW = 0x08000000 if _IS_WINDOWS else 0
 
 
+def _ffprobe_bin() -> str:
+    """Locate ffprobe: PATH first, then beside ffmpeg, then the bare name."""
+    import shutil
+    found = shutil.which("ffprobe")
+    if found:
+        return found
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        cand = Path(ffmpeg).with_name("ffprobe" + (".exe" if _IS_WINDOWS else ""))
+        if cand.exists():
+            return str(cand)
+    return "ffprobe"
+
+
+def _has_video_stream(path: Path) -> bool:
+    """True if ffprobe sees a real, playable video stream in the file.
+
+    Replaces a naive size threshold: a short Telegram clip can be a few hundred
+    KB yet perfectly valid, while a failed download can leave a >512 KB HTML
+    error page that is not a video at all.
+    """
+    try:
+        if not path.exists() or path.stat().st_size < 2048:
+            return False
+    except Exception:
+        return False
+    try:
+        proc = _run(
+            [
+                _ffprobe_bin(), "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=codec_type",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            timeout=20,
+        )
+        return proc.returncode == 0 and "video" in (proc.stdout or "").lower()
+    except Exception:
+        # If ffprobe is unavailable, fall back to a conservative size check.
+        try:
+            return path.stat().st_size > 64 * 1024
+        except Exception:
+            return False
+
+
 def _slug_for_url(url: str) -> str:
     """Stable, filesystem-safe cache key derived from a URL."""
     host = (urlparse(url).netloc or "site").replace("www.", "")
@@ -137,7 +183,7 @@ def download_generic_video(url: str, on_progress: ProgressCb = None) -> Path:
     # 1. Cache check — reuse a previous download of the same link.
     cached = [
         f for f in UPLOADS_DIR.glob(f"site_{slug}*.*")
-        if f.is_file() and f.stat().st_size > 512 * 1024
+        if f.is_file() and _has_video_stream(f)
     ]
     if cached:
         cached.sort(key=lambda p: p.stat().st_size, reverse=True)
@@ -230,7 +276,7 @@ def download_generic_video(url: str, on_progress: ProgressCb = None) -> Path:
 
     candidates = [
         f for f in UPLOADS_DIR.glob(f"site_{slug}*.*")
-        if f.is_file() and f.stat().st_size > 512 * 1024
+        if f.is_file() and _has_video_stream(f)
     ]
     if returncode != 0 and not candidates:
         raise ValueError(
@@ -240,6 +286,15 @@ def download_generic_video(url: str, on_progress: ProgressCb = None) -> Path:
             "(often ending in .mp4 or .m3u8) instead of the landing page."
         )
     if not candidates:
+        # Telegram gets a targeted hint: most failures are a channel/group root
+        # URL (no single post) or a text-only post, not a broken downloader.
+        if (urlparse(url).netloc or "").lower().endswith("t.me"):
+            raise ValueError(
+                "No video found at this Telegram link. Make sure you copied the link "
+                "to a specific post that contains a video (it looks like "
+                "https://t.me/channel/123), not the channel root "
+                "(https://t.me/channel) or a text-only message."
+            )
         raise ValueError(
             "The download produced no usable video file. The site may require a "
             "login, may serve the film through a JavaScript-only player, or may "
