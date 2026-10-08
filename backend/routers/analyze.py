@@ -4,6 +4,7 @@ import logging
 import os
 import re
 from typing import List, Optional
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -24,6 +25,8 @@ from backend.schemas.analyze import (
     AnalyzeResponse,
     HeatmapPoint,
     TranscriptLine,
+    TranslateRequest,
+    TranslateResponse,
     VideoAnalysis,
     ViralClip,
 )
@@ -32,9 +35,20 @@ from backend.services.ai_service import (
     get_flash_models_for_key,
     list_available_gemini_models,
 )
+from backend.services.openai_service import (
+    DEFAULT_9ROUTER_BASE_URL,
+    normalize_openai_base_url,
+    openai_generate_json,
+    openai_list_models,
+)
 from backend.services.gdrive_service import (
     download_google_drive_video,
     is_google_drive_url,
+)
+from backend.services.generic_video_service import (
+    download_generic_video,
+    fetch_generic_metadata,
+    is_generic_video_url,
 )
 from backend.services.youtube_service import (
     fetch_transcript,
@@ -43,6 +57,7 @@ from backend.services.youtube_service import (
     get_supadata_usage_data,
 )
 from backend.utils.heatmap import get_average_heatmap_value
+from backend.utils.languages import SUPPORTED_LANGUAGES, resolve_language_name
 from backend.utils.proxy import get_proxy_url
 from backend.utils.sse import _sse
 from backend.utils.text import (
@@ -91,10 +106,192 @@ def supadata_usage_endpoint(refresh: bool = False):
 
 
 @router.get("/api/models")
-def list_available_models(api_key: str = ""):
-    """Fetches list of available Gemini models using the user's API key, prioritizing Flash models (newest first)."""
+def list_available_models(api_key: str = "", provider: str = "gemini", base_url: str = ""):
+    """Lists models for the selected provider.
+
+    - provider=gemini  → Google Gemini models (Flash first, newest first).
+    - provider=openai  → any OpenAI-compatible endpoint (e.g. 9router) model catalogue.
+    """
+    if (provider or "gemini").strip().lower() in ("openai", "9router", "openai-compatible", "local"):
+        models = openai_list_models(base_url or DEFAULT_9ROUTER_BASE_URL, api_key)
+        return {"models": models, "provider": "openai"}
     models = list_available_gemini_models(api_key)
-    return {"models": models}
+    return {"models": models, "provider": "gemini"}
+
+
+@router.get("/api/languages")
+def list_languages():
+    """Returns every language the UI can offer for transcript & title translation.
+
+    Each entry: {"code": "id", "name": "Indonesian (Bahasa Indonesia)"}.
+    """
+    languages = [{"code": code, "name": name} for code, name in SUPPORTED_LANGUAGES.items()]
+    return {"languages": languages, "count": len(languages)}
+
+
+def _translate_lines_sync(
+    indexed_lines: List[dict],
+    language_name: str,
+    source_language: Optional[str],
+    provider: str,
+    base_url: str,
+    api_key: str,
+    requested_model: str,
+) -> dict:
+    """Synchronous transcript translation via Gemini or any OpenAI-compatible endpoint.
+
+    Returns the raw parsed JSON dict (expected shape: {"lines": [{"i": int, "text": str}]}).
+    Shared by the /api/translate endpoint and the analyze flow.
+    """
+    is_openai_provider = provider in ("openai", "9router", "openai-compatible", "local")
+    source_hint = resolve_language_name(source_language) if source_language else ""
+
+    prompt = (
+        f"You are a professional subtitle translator. Translate the following transcript into "
+        f"{language_name}.\n\n"
+        f"RULES:\n"
+        f"1. Translate EVERY line's `text` field into {language_name}. Do NOT leave any line untranslated.\n"
+        f"2. Keep the same number of lines and the SAME `i` index for every line — never merge, split, reorder, or drop lines.\n"
+        f"3. Preserve names, brand names, numbers, and technical terms accurately.\n"
+        f"4. Keep translations natural and fluent, matching the tone of the original spoken language"
+        + (f" (source language hint: {source_hint})." if source_hint else ".") + "\n"
+        f"5. Return a JSON object of the form: {{\"lines\": [{{\"i\": 0, \"text\": \"...\"}}, ...]}} "
+        f"with one entry per input line.\n\n"
+        f"INPUT LINES (JSON):\n{json.dumps(indexed_lines, ensure_ascii=False)}"
+    )
+
+    if is_openai_provider:
+        catalogue = openai_list_models(base_url, api_key)
+        models_to_try: List[str] = []
+        if requested_model and not requested_model.lower().startswith("gemini-"):
+            models_to_try.append(requested_model)
+        for needle in ("hermesagent", "gpt-", "claude", "gemini/", "auto"):
+            for candidate in catalogue:
+                if needle in candidate.lower() and candidate not in models_to_try:
+                    models_to_try.append(candidate)
+        for candidate in catalogue:
+            if candidate not in models_to_try:
+                models_to_try.append(candidate)
+        if not models_to_try:
+            models_to_try = [requested_model or "hermesagent"]
+        last_err: Optional[Exception] = None
+        for model_name in models_to_try[:8]:
+            try:
+                return openai_generate_json(
+                    base_url, api_key, model_name, prompt,
+                    {"type": "object", "properties": {"lines": {"type": "array"}}},
+                    0.2, 420,
+                )
+            except Exception as exc:  # noqa: BLE001
+                last_err = exc
+                logger.warning(f"Translate attempt with {model_name} failed: {exc}")
+        raise RuntimeError(str(last_err) if last_err else "Translation failed.")
+
+    # Gemini path
+    client = genai.Client(api_key=api_key)
+    discovered = get_flash_models_for_key(client)
+    models_to_try = [requested_model] if requested_model else []
+    for fm in discovered + KNOWN_FLASH_MODELS:
+        if fm not in models_to_try:
+            models_to_try.append(fm)
+    last_err = None
+    for model_name in models_to_try:
+        try:
+            resp = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.2,
+                    max_output_tokens=65536 if any(v in model_name for v in ["2.0", "2.5", "3."]) else 8192,
+                ),
+            )
+            raw_text = (getattr(resp, "text", None) or "").strip()
+            if raw_text.startswith("```"):
+                raw_text = re.sub(r"^```[a-zA-Z]*\n?", "", raw_text)
+                raw_text = re.sub(r"\n?```$", "", raw_text)
+            return json.loads(raw_text)
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            logger.warning(f"Translate attempt with {model_name} failed: {exc}")
+    raise RuntimeError(str(last_err) if last_err else "Translation failed.")
+
+
+def _extract_translated_map(parsed: dict) -> dict:
+    """Turn a model reply like {"lines":[{"i":0,"text":"..."}]} into {index: text}."""
+    translated_map: dict = {}
+    for item in (parsed.get("lines") if isinstance(parsed, dict) else None) or []:
+        if isinstance(item, dict) and item.get("i") is not None:
+            try:
+                translated_map[int(item["i"])] = str(item.get("text", "")).strip()
+            except (ValueError, TypeError):
+                continue
+    return translated_map
+
+
+@router.post("/api/translate")
+async def translate_transcript(request: TranslateRequest):
+    """Translate an existing transcript into the requested target language.
+
+    Runs synchronously (non-streaming) and mirrors the analyze endpoint's
+    provider selection (Gemini or any OpenAI-compatible endpoint such as 9router).
+    Timestamps are preserved 1:1 so the translated transcript lines up with the
+    original for SRT export and clip reconstruction.
+    """
+    provider = (request.provider or "gemini").strip().lower()
+    is_openai_provider = provider in ("openai", "9router", "openai-compatible", "local")
+    openai_base_url = normalize_openai_base_url(request.base_url or DEFAULT_9ROUTER_BASE_URL)
+
+    api_key = (request.api_key or os.environ.get("GEMINI_API_KEY") or "").strip()
+    if not is_openai_provider and not api_key:
+        raise HTTPException(status_code=400, detail="Gemini API Key is required. Enter it in the web interface.")
+
+    language_name = resolve_language_name(request.target_language)
+    if not language_name:
+        raise HTTPException(status_code=400, detail="A valid target language is required.")
+
+    lines = request.transcript or []
+    if not lines:
+        raise HTTPException(status_code=400, detail="No transcript lines were provided to translate.")
+
+    indexed_lines = [
+        {
+            "i": idx,
+            "start": round(float(line.start), 2),
+            "end": round(float(line.end), 2),
+            "text": (line.text or "").strip(),
+        }
+        for idx, line in enumerate(lines)
+    ]
+
+    requested_model = (request.model or "gemini-2.5-flash").strip()
+
+    try:
+        parsed = await asyncio.to_thread(
+            _translate_lines_sync,
+            indexed_lines, language_name, request.source_language,
+            provider, openai_base_url, api_key, requested_model,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Translation failed: {exc}")
+
+    translated_map = _extract_translated_map(parsed)
+
+    translated_lines: List[TranscriptLine] = []
+    for idx, line in enumerate(lines):
+        new_text = translated_map.get(idx) or (line.text or "")
+        translated_lines.append(TranscriptLine(
+            start=float(line.start),
+            end=float(line.end),
+            text=new_text,
+            engagement=line.engagement,
+        ))
+
+    return TranslateResponse(
+        transcript=translated_lines,
+        target_language=request.target_language,
+        language_name=language_name,
+    )
 
 
 @router.post("/api/analyze")
@@ -102,10 +299,19 @@ async def analyze_video(request: AnalyzeRequest):
     """Stream real-time progress via Server-Sent Events, then deliver the final result."""
 
     async def stream():
+        provider = (request.provider or "gemini").strip().lower()
+        is_openai_provider = provider in ("openai", "9router", "openai-compatible", "local")
+        openai_base_url = normalize_openai_base_url(request.base_url or DEFAULT_9ROUTER_BASE_URL)
+
         gemini_key = (request.api_key or os.environ.get("GEMINI_API_KEY") or '').strip()
         is_mock = gemini_key.lower() == "mock"
 
-        if not gemini_key:
+        if is_openai_provider:
+            # OpenAI-compatible providers (9router, OpenRouter, LM Studio, ...) may
+            # run locally without any key — only block when the endpoint demands one.
+            if not gemini_key and not request.api_key:
+                gemini_key = ""
+        elif not gemini_key:
             yield _sse({"error": "Gemini API Key is required. Enter it in the web interface.", "status": 400})
             return
 
@@ -113,6 +319,7 @@ async def analyze_video(request: AnalyzeRequest):
         req_clean = request.url.strip()
         is_uploaded = False
         is_gdrive = is_google_drive_url(req_clean)
+        is_generic = False
         uploaded_file_path: Optional[Path] = None
 
         if is_gdrive:
@@ -155,6 +362,49 @@ async def analyze_video(request: AnalyzeRequest):
             except Exception as e:
                 yield _sse({"error": f"Failed to fetch video from Google Drive: {str(e)}", "status": 400})
                 return
+        elif is_generic_video_url(req_clean):
+            # ── Generic site (film/streaming/embed/direct media) download path ──
+            is_generic = True
+            host = urlparse(req_clean).netloc or "the site"
+            yield _sse({
+                "step": 1,
+                "step_progress": 8,
+                "overall_progress": 4,
+                "stage": f"Connecting to {host}",
+                "detail": f"Resolving the video stream from {host} and preparing download...",
+                "message": f"Connecting to {host}..."
+            })
+            loop = asyncio.get_running_loop()
+            site_queue: asyncio.Queue = asyncio.Queue()
+
+            def site_progress(stage: str, detail: str, step_pct: int = 30):
+                loop.call_soon_threadsafe(site_queue.put_nowait, {
+                    "step": 1,
+                    "step_progress": step_pct,
+                    "overall_progress": min(22, 4 + int(step_pct * 0.18)),
+                    "stage": stage,
+                    "detail": detail,
+                    "message": detail
+                })
+
+            try:
+                task = asyncio.create_task(
+                    asyncio.to_thread(download_generic_video, req_clean, site_progress)
+                )
+                while not task.done():
+                    try:
+                        evt = await asyncio.wait_for(site_queue.get(), timeout=0.2)
+                        yield _sse(evt)
+                    except asyncio.TimeoutError:
+                        pass
+                while not site_queue.empty():
+                    yield _sse(site_queue.get_nowait())
+
+                uploaded_file_path = await task
+                is_uploaded = True
+            except Exception as e:
+                yield _sse({"error": f"Failed to download video from this link: {str(e)}", "status": 400})
+                return
         elif req_clean.startswith("upload_") or req_clean.startswith("/api/video/") or req_clean.startswith("file://") or os.path.exists(req_clean):
             is_uploaded = True
         elif (UPLOADS_DIR / os.path.basename(req_clean.split("?")[0])).exists():
@@ -181,9 +431,9 @@ async def analyze_video(request: AnalyzeRequest):
                         return
 
             video_id = uploaded_file_path.stem
-            canonical_url = req_clean if is_gdrive else f"/api/video/{uploaded_file_path.name}"
+            canonical_url = req_clean if (is_gdrive or is_generic) else f"/api/video/{uploaded_file_path.name}"
             video_url = f"/api/video/{uploaded_file_path.name}"
-            source_type = "gdrive" if is_gdrive else "upload"
+            source_type = "gdrive" if is_gdrive else ("site" if is_generic else "upload")
 
             yield _sse({
                 "step": 1,
@@ -198,6 +448,17 @@ async def analyze_video(request: AnalyzeRequest):
                 metadata = await asyncio.to_thread(get_video_file_metadata, uploaded_file_path)
                 title = metadata.get("title") or (uploaded_file_path.stem.replace("gdrive_", "GDrive: ") if is_gdrive else uploaded_file_path.stem)
                 channel = "Google Drive" if is_gdrive else "Local Upload"
+                if is_generic:
+                    try:
+                        site_meta = await asyncio.to_thread(fetch_generic_metadata, req_clean)
+                    except Exception:
+                        site_meta = {}
+                    if site_meta.get("title"):
+                        title = site_meta["title"]
+                    if site_meta.get("channel"):
+                        channel = site_meta["channel"]
+                    if site_meta.get("duration"):
+                        metadata["duration"] = site_meta["duration"]
                 duration = metadata.get("duration", 0.0)
                 is_live = False
                 live_status = "not_live"
@@ -706,6 +967,15 @@ async def analyze_video(request: AnalyzeRequest):
         lang_name = detected_lang.get('name', 'English')
         logger.info(f"Detected video language: {lang_name} ({lang_code}) - confidence {detected_lang.get('confidence', 0.0)}")
 
+        # Optional user-requested output language for clip titles/summary/captions.
+        # 'auto' (or empty) keeps the video's own detected language (zero-translation).
+        requested_title_lang = resolve_language_name(request.title_language)
+        output_lang_name = requested_title_lang or lang_name
+        output_lang_code = (request.title_language or '').strip() or lang_code
+        is_title_translation = bool(requested_title_lang) and requested_title_lang.lower() != lang_name.lower()
+        if is_title_translation:
+            logger.info(f"Title/summary language override requested: {lang_name} -> {output_lang_name}")
+
         transcript_dump = []
         for line in enriched_transcript:
             eng = f"|{line['engagement']:.2f}" if heatmap and line['engagement'] > 0 else ""
@@ -748,6 +1018,46 @@ async def analyze_video(request: AnalyzeRequest):
 
         channel_context = f"- Channel / Host / Creator: {channel}\n" if channel else ""
 
+        if is_title_translation:
+            language_block = (
+                f"================================================================================\n"
+                f"CRITICAL MANDATORY OUTPUT LANGUAGE RULE:\n"
+                f"================================================================================\n"
+                f"THE MAIN SPOKEN LANGUAGE OF THIS VIDEO IS: {lang_name.upper()} (Language Code: '{lang_code}').\n"
+                f"THE USER HAS REQUESTED THAT ALL GENERATED TEXT BE WRITTEN IN: {output_lang_name.upper()}.\n\n"
+                f"1. You MUST write the following fields 100% in {output_lang_name.upper()} (translate them if the video is in another language):\n"
+                f"   - `summary`: In {output_lang_name.upper()}.\n"
+                f"   - `title`: Catchy title in {output_lang_name.upper()}, max 8 words.\n"
+                f"   - `title_suggestion`: Alternative title in {output_lang_name.upper()}.\n"
+                f"   - `caption_suggestion`: Engaging social caption in {output_lang_name.upper()}.\n"
+                f"   - `hashtag_suggestion`: Relevant hashtags in {output_lang_name.upper()}.\n"
+                f"2. `key_quotes` MUST remain VERBATIM quotes exactly as spoken in the ORIGINAL transcript language ({lang_name.upper()}). DO NOT translate key_quotes.\n"
+                f"3. Translate meaning faithfully and naturally; never output any third language.\n"
+                f"================================================================================\n\n"
+            )
+        else:
+            language_block = (
+                f"================================================================================\n"
+                f"CRITICAL MANDATORY LANGUAGE RULE (ZERO TRANSLATION):\n"
+                f"================================================================================\n"
+                f"THE MAIN SPOKEN LANGUAGE OF THIS VIDEO IS: {lang_name.upper()} (Language Code: '{lang_code}').\n"
+                f"YOU MUST GENERATE 100% OF ALL CONTENT STRICTLY AND EXCLUSIVELY IN {lang_name.upper()}.\n\n"
+                f"1. NEVER TRANSLATE TO ANY OTHER LANGUAGE!\n"
+                f"   - If the video is in English -> ALL titles, title suggestions, summaries, captions, hashtags, and quotes MUST BE 100% IN ENGLISH. Do NOT write Indonesian, Spanish, or any other language!\n"
+                f"   - If the video is in Indonesian -> ALL titles, title suggestions, summaries, captions, hashtags, and quotes MUST BE 100% IN INDONESIAN. Do NOT write English, Arabic, or any other language!\n"
+                f"   - CRITICAL GUARD FOR INDONESIAN VIDEOS: If speakers use occasional Arabic loanwords or Islamic greetings/phrases (e.g., 'Assalamu'alaikum', 'Bismillah', 'Alhamdulillah', 'Insya Allah', or Arabic quotes), DO NOT TRANSLATE INTO ARABIC! The video language is 100% BAHASA INDONESIA. All titles, suggestions, and captions MUST be written strictly in BAHASA INDONESIA.\n"
+                f"   - If the video is in another language -> ALL output MUST strictly match that language.\n"
+                f"   - Even if the user's prompt or search query was written in another language, your output MUST REMAIN 100% IN {lang_name.upper()}.\n"
+                f"2. Strict field requirements in {lang_name.upper()}:\n"
+                f"   - `summary`: In {lang_name.upper()}.\n"
+                f"   - `title`: Catchy title in {lang_name.upper()}, max 8 words.\n"
+                f"   - `title_suggestion`: Alternative title in {lang_name.upper()}.\n"
+                f"   - `caption_suggestion`: Engaging social caption in {lang_name.upper()}.\n"
+                f"   - `hashtag_suggestion`: Relevant hashtags in {lang_name.upper()}.\n"
+                f"   - `key_quotes`: MUST be verbatim spoken quotes directly from the transcript in {lang_name.upper()}.\n"
+                f"================================================================================\n\n"
+            )
+
         prompt = (
             f"You are an expert viral video clip editor finding top clip candidates for TikTok, Instagram Reels, and YouTube Shorts.\n"
             f"Analyze this YouTube video transcript and find {clip_range} high-performing, standalone clip candidates.\n\n"
@@ -757,25 +1067,7 @@ async def analyze_video(request: AnalyzeRequest):
             f"- Video Duration: {int(start_bound)}s to {int(end_bound)}s (Total: {int(duration)}s) | Target clip length: {dur_range}\n"
             f"- Heatmap: {heatmap_note}\n"
             f"- DETECTED VIDEO SPOKEN LANGUAGE: {lang_name} (Code: '{lang_code}')\n\n"
-            f"================================================================================\n"
-            f"CRITICAL MANDATORY LANGUAGE RULE (ZERO TRANSLATION):\n"
-            f"================================================================================\n"
-            f"THE MAIN SPOKEN LANGUAGE OF THIS VIDEO IS: {lang_name.upper()} (Language Code: '{lang_code}').\n"
-            f"YOU MUST GENERATE 100% OF ALL CONTENT STRICTLY AND EXCLUSIVELY IN {lang_name.upper()}.\n\n"
-            f"1. NEVER TRANSLATE TO ANY OTHER LANGUAGE!\n"
-            f"   - If the video is in English -> ALL titles, title suggestions, summaries, captions, hashtags, and quotes MUST BE 100% IN ENGLISH. Do NOT write Indonesian, Spanish, or any other language!\n"
-            f"   - If the video is in Indonesian -> ALL titles, title suggestions, summaries, captions, hashtags, and quotes MUST BE 100% IN INDONESIAN. Do NOT write English, Arabic, or any other language!\n"
-            f"   - CRITICAL GUARD FOR INDONESIAN VIDEOS: If speakers use occasional Arabic loanwords or Islamic greetings/phrases (e.g., 'Assalamu\'alaikum', 'Bismillah', 'Alhamdulillah', 'Insya Allah', or Arabic quotes), DO NOT TRANSLATE INTO ARABIC! The video language is 100% BAHASA INDONESIA. All titles, suggestions, and captions MUST be written strictly in BAHASA INDONESIA.\n"
-            f"   - If the video is in another language -> ALL output MUST strictly match that language.\n"
-            f"   - Even if the user's prompt or search query was written in another language, your output MUST REMAIN 100% IN {lang_name.upper()}.\n"
-            f"2. Strict field requirements in {lang_name.upper()}:\n"
-            f"   - `summary`: In {lang_name.upper()}.\n"
-            f"   - `title`: Catchy title in {lang_name.upper()}, max 8 words.\n"
-            f"   - `title_suggestion`: Alternative title in {lang_name.upper()}.\n"
-            f"   - `caption_suggestion`: Engaging social caption in {lang_name.upper()}.\n"
-            f"   - `hashtag_suggestion`: Relevant hashtags in {lang_name.upper()}.\n"
-            f"   - `key_quotes`: MUST be verbatim spoken quotes directly from the transcript in {lang_name.upper()}.\n"
-            f"================================================================================\n\n"
+            f"{language_block}"
             f"{duration_instruction}\n\n"
             f"{clip_count_instruction}\n\n"
             f"{focus_instruction}"
@@ -793,7 +1085,7 @@ async def analyze_video(request: AnalyzeRequest):
         )
 
         requested_model = (request.model or 'gemini-2.5-flash').strip()
-        if any(dep in requested_model.lower() for dep in ['gemini-1.0', 'gemini-pro-vision']):
+        if not is_openai_provider and any(dep in requested_model.lower() for dep in ['gemini-1.0', 'gemini-pro-vision']):
             logger.info(f"Requested model '{requested_model}' is outdated. Upgrading to gemini-2.5-flash.")
             requested_model = 'gemini-2.5-flash'
 
@@ -807,24 +1099,45 @@ async def analyze_video(request: AnalyzeRequest):
             "message": f"Verified language: {lang_name}. Zero-translation rule enforced for {requested_model}."
         })
 
-        # ── Step 4: Gemini API call with dynamic Flash fallback models and retry ───────────
-        client = genai.Client(api_key=gemini_key)
-        
-        # Discover all available Flash models for the user's API key
-        discovered_flash = await asyncio.to_thread(get_flash_models_for_key, client)
-        
-        # Build models_to_try:
-        # 1. Start with the requested model
-        # 2. Append all discovered and known flash models in version descending order (e.g. 3.7, 3.6, 3.5, 2.5, 2.0, 1.5)
-        models_to_try = [requested_model]
-        for fm in discovered_flash:
-            if fm not in models_to_try:
-                models_to_try.append(fm)
-        for km in KNOWN_FLASH_MODELS:
-            if km not in models_to_try:
-                models_to_try.append(km)
+        # ── Step 4: AI call with dynamic fallback models and retry ───────────
+        client = None
+        models_to_try: List[str] = []
 
-        logger.info(f"Flash fallback chain prepared: {models_to_try}")
+        if is_openai_provider:
+            # Any OpenAI-compatible endpoint (9router by default). The catalogue can
+            # hold hundreds of models, so fall back to a few known-good entries.
+            catalogue = await asyncio.to_thread(openai_list_models, openai_base_url, gemini_key)
+            preferred = []
+            # A bare 'gemini-2.5-flash' is a Gemini-native name and is meaningless
+            # for an OpenAI-compatible router — skip it unless it carries a prefix.
+            if requested_model and not requested_model.lower().startswith('gemini-'):
+                preferred.append(requested_model)
+            for needle in ('hermesagent', 'gpt-', 'claude', 'gemini/', 'auto'):
+                for candidate in catalogue:
+                    if needle in candidate.lower() and candidate not in preferred:
+                        preferred.append(candidate)
+            for candidate in catalogue:
+                if candidate not in preferred:
+                    preferred.append(candidate)
+            models_to_try = preferred[:8] or [requested_model or 'hermesagent']
+            if not requested_model or requested_model.lower().startswith('gemini-'):
+                requested_model = models_to_try[0]
+            logger.info(f"OpenAI-compatible fallback chain prepared ({openai_base_url}): {models_to_try}")
+        else:
+            client = genai.Client(api_key=gemini_key)
+            # Discover all available Flash models for the user's API key
+            discovered_flash = await asyncio.to_thread(get_flash_models_for_key, client)
+            # Build models_to_try:
+            # 1. Start with the requested model
+            # 2. Append all discovered and known flash models in version descending order
+            models_to_try = [requested_model]
+            for fm in discovered_flash:
+                if fm not in models_to_try:
+                    models_to_try.append(fm)
+            for km in KNOWN_FLASH_MODELS:
+                if km not in models_to_try:
+                    models_to_try.append(km)
+            logger.info(f"Flash fallback chain prepared: {models_to_try}")
 
         response = None
         last_error = None
@@ -860,18 +1173,30 @@ async def analyze_video(request: AnalyzeRequest):
                     "message": f"Calling {model_name} (attempt {attempt + 1}/{MAX_RETRIES})..."
                 })
                 
-                # Execute Gemini call with heartbeat to keep mobile connection alive and show live stages
-                task = asyncio.create_task(asyncio.to_thread(
-                    client.models.generate_content,
-                    model=model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=VideoAnalysis,
-                        temperature=0.2,
-                        max_output_tokens=65536 if any(v in model_name for v in ['2.0', '2.5', '3.']) else 8192,
-                    )
-                ))
+                # Execute AI call with heartbeat to keep mobile connection alive and show live stages
+                if is_openai_provider:
+                    task = asyncio.create_task(asyncio.to_thread(
+                        openai_generate_json,
+                        openai_base_url,
+                        gemini_key,
+                        model_name,
+                        prompt,
+                        VideoAnalysis.model_json_schema(),
+                        0.2,
+                        420,
+                    ))
+                else:
+                    task = asyncio.create_task(asyncio.to_thread(
+                        client.models.generate_content,
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_schema=VideoAnalysis,
+                            temperature=0.2,
+                            max_output_tokens=65536 if any(v in model_name for v in ['2.0', '2.5', '3.']) else 8192,
+                        )
+                    ))
                 
                 call_start = asyncio.get_event_loop().time()
                 while not task.done():
@@ -924,7 +1249,28 @@ async def analyze_video(request: AnalyzeRequest):
                     
                     # Parse structured response
                     parsed_data = None
-                    if hasattr(resp_candidate, 'parsed') and resp_candidate.parsed is not None:
+                    if is_openai_provider:
+                        # openai_generate_json already returns a plain dict.
+                        if isinstance(resp_candidate, dict) and resp_candidate:
+                            raw_clips = resp_candidate.get("clips") or []
+                            parsed_data = {
+                                "summary": resp_candidate.get("summary", "") or "",
+                                "clips": [
+                                    {
+                                        "title": sanitize_first_person_title(c.get("title", ""), channel, lang=lang_code),
+                                        "start_time": float(c.get("start_time", 0.0) or 0.0),
+                                        "end_time": float(c.get("end_time", 0.0) or 0.0),
+                                        "hook_time": c.get("hook_time"),
+                                        "virality_score": int(c.get("virality_score", 0) or 0),
+                                        "key_quotes": c.get("key_quotes") or [],
+                                        "title_suggestion": sanitize_first_person_title(c.get("title_suggestion", ""), channel, lang=lang_code),
+                                        "caption_suggestion": c.get("caption_suggestion", "") or "",
+                                        "hashtag_suggestion": c.get("hashtag_suggestion", "") or "",
+                                    }
+                                    for c in raw_clips if isinstance(c, dict)
+                                ]
+                            }
+                    elif hasattr(resp_candidate, 'parsed') and resp_candidate.parsed is not None:
                         parsed = resp_candidate.parsed
                         parsed_data = {
                             "summary": getattr(parsed, 'summary', ''),
@@ -943,7 +1289,7 @@ async def analyze_video(request: AnalyzeRequest):
                                 for c in (getattr(parsed, 'clips', []) or [])
                             ]
                         }
-                    elif resp_candidate.text:
+                    elif getattr(resp_candidate, 'text', None):
                         raw_text = resp_candidate.text.strip()
                         if raw_text.startswith("```"):
                             raw_text = re.sub(r"^```[a-zA-Z]*\n?", "", raw_text)
@@ -1014,38 +1360,39 @@ async def analyze_video(request: AnalyzeRequest):
         if analysis_data is None:
             # If any model in the fallback chain suffered quota exhaustion, prioritize showing the quota explanation
             error_to_report = encountered_quota_error or last_error
+            provider_label = "the OpenAI-compatible provider" if is_openai_provider else "Gemini"
             if error_to_report is not None:
                 err_str = str(error_to_report).lower()
-                if any(x in err_str for x in ('429', 'quota', 'resource exhausted', 'rate limit')):
+                if any(x in err_str for x in ('429', 'quota', 'resource exhausted', 'rate limit', 'insufficient')):
                     yield _sse({
-                        "error": "Quota limit reached across all available Gemini Flash models for this API key. Free keys have a request limit per minute. Please change your API key, generate a fresh free key at aistudio.google.com, or wait 30–60 seconds before trying again.",
+                        "error": f"Quota/credit limit reached across all available models on {provider_label}. Please change your API key, use a different model, or wait 30–60 seconds before trying again.",
                         "status": 429
                     })
                 elif any(x in err_str for x in ('503', 'unavailable', 'overloaded')):
                     yield _sse({
-                        "error": "Google Gemini servers are currently experiencing high demand across all Flash models. Please change to a different Gemini API key or wait a few moments and try again.",
+                        "error": f"The AI servers behind {provider_label} are currently experiencing high demand across all models. Please try a different model or wait a few moments and try again.",
                         "status": 503
                     })
-                elif any(x in err_str for x in ('401', '403', 'api_key', 'invalid', 'permission')):
+                elif any(x in err_str for x in ('401', '403', 'api_key', 'invalid', 'permission', 'unauthorized')):
                     yield _sse({
-                        "error": "Invalid or restricted Gemini API key. Please change your API key or generate a new free key at aistudio.google.com.",
+                        "error": f"Invalid or rejected API key for {provider_label}. Please check your API key and try again.",
                         "status": 401
                     })
                 elif any(x in err_str for x in ('404', 'not found', 'not supported')):
                     models_preview = ', '.join(models_to_try[:3])
                     yield _sse({
-                        "error": f"All tested Gemini Flash models ({models_preview}...) were unavailable or not supported for this API key. Please change your Gemini API key or generate a new one at aistudio.google.com.",
+                        "error": f"All tested models ({models_preview}...) were unavailable or not supported on {provider_label}. Please pick another model or check your provider settings.",
                         "status": 404
                     })
                 else:
-                    logger.error(f"Gemini error after all fallback models: {error_to_report}")
+                    logger.error(f"AI error after all fallback models: {error_to_report}")
                     yield _sse({
-                        "error": f"AI analysis failed across all available Flash models ({str(error_to_report)}). Please change your Gemini API key or try again in a few moments.",
+                        "error": f"AI analysis failed across all available models on {provider_label} ({str(error_to_report)}). Please try a different model or check your provider settings.",
                         "status": 500
                     })
             else:
                 yield _sse({
-                    "error": "No response received after trying all available Gemini Flash models. Please change your Gemini API key or try again in a few moments.",
+                    "error": f"No response received after trying all available models on {provider_label}. Please try again in a few moments.",
                     "status": 500
                 })
             return
@@ -1077,7 +1424,7 @@ async def analyze_video(request: AnalyzeRequest):
                 seg_lines = [l['text'] for l in enriched_transcript if max(l['start'], st) < min(l['end'], et)]
                 seg_text = " ".join(seg_lines).strip()
                 preview = seg_text[:60] + "..." if len(seg_text) > 60 else seg_text or f"Viral Highlight #{i+1}"
-                if lang_code == 'id':
+                if output_lang_code == 'id':
                     fallback_clips_list.append({
                         "title": f"Momen Menarik #{i+1}",
                         "start_time": st,
@@ -1089,7 +1436,7 @@ async def analyze_video(request: AnalyzeRequest):
                         "caption_suggestion": f"Momen terbaik dari video: {preview} #viral #trending",
                         "hashtag_suggestion": "#viral #shorts #trending"
                     })
-                elif lang_code == 'es':
+                elif output_lang_code == 'es':
                     fallback_clips_list.append({
                         "title": f"Momento Destacado #{i+1}",
                         "start_time": st,
@@ -1115,9 +1462,9 @@ async def analyze_video(request: AnalyzeRequest):
                     })
             analysis_data['clips'] = fallback_clips_list
             if not analysis_data.get('summary'):
-                if lang_code == 'id':
+                if output_lang_code == 'id':
                     analysis_data['summary'] = f"Analisis video \"{title}\" menemukan {len(fallback_clips_list)} segmen cuplikan pilihan. #viral #highlights"
-                elif lang_code == 'es':
+                elif output_lang_code == 'es':
                     analysis_data['summary'] = f"Análisis de \"{title}\" identificando {len(fallback_clips_list)} segmentos clave. #viral #highlights"
                 else:
                     analysis_data['summary'] = f"Analysis of \"{title}\" identifying {len(fallback_clips_list)} key segments. #viral #highlights"
@@ -1188,6 +1535,53 @@ async def analyze_video(request: AnalyzeRequest):
             )
             for pt in (heatmap or [])
         ]
+
+        # ── Optional transcript translation ─────────────────────────────────
+        # When the user asked for a transcript language different from the
+        # video's own language, translate the transcript lines (timestamps kept).
+        requested_transcript_lang = resolve_language_name(request.transcript_language)
+        if requested_transcript_lang and requested_transcript_lang.lower() != lang_name.lower():
+            yield _sse({
+                "step": 4,
+                "step_progress": 99,
+                "overall_progress": 99,
+                "stage": "Transcript Translation",
+                "detail": f"Translating {len(enriched_transcript)} transcript lines into {requested_transcript_lang}...",
+                "model": successful_model or requested_model,
+                "message": f"Translating transcript into {requested_transcript_lang}..."
+            })
+            indexed_lines = [
+                {
+                    "i": idx,
+                    "start": round(float(l["start"]), 2),
+                    "end": round(float(l["end"]), 2),
+                    "text": l.get("text", ""),
+                }
+                for idx, l in enumerate(enriched_transcript)
+            ]
+            try:
+                parsed_translation = await asyncio.to_thread(
+                    _translate_lines_sync,
+                    indexed_lines, requested_transcript_lang, lang_code,
+                    provider, openai_base_url, gemini_key,
+                    (successful_model or requested_model),
+                )
+                translated_map = _extract_translated_map(parsed_translation)
+                if translated_map:
+                    for idx, l in enumerate(enriched_transcript):
+                        if idx in translated_map and translated_map[idx]:
+                            l["text"] = translated_map[idx]
+                    logger.info(f"Transcript translated into {requested_transcript_lang} ({len(translated_map)} lines).")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"Transcript translation into {requested_transcript_lang} failed: {exc}")
+                yield _sse({
+                    "step": 4,
+                    "step_progress": 99,
+                    "overall_progress": 99,
+                    "stage": "Transcript Translation",
+                    "detail": f"Transcript translation skipped ({exc}).",
+                    "message": f"Transcript translation could not be completed: {exc}"
+                })
 
         response_transcript = [
             TranscriptLine(

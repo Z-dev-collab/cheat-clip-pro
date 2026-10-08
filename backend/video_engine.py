@@ -89,6 +89,8 @@ def ensure_ffmpeg_in_path():
             Path(prog_files_x86) / "ffmpeg" / "bin",
             Path("C:/ffmpeg/bin"),
             Path("C:/Program Files/ffmpeg/bin"),
+            # Hermes-managed ffmpeg bundle (offline / no winget needed)
+            Path(local_app_data) / "hermes" / "tools" if local_app_data else None,
         ]
 
         # Homebrew's standard formula omits libass; ffmpeg-full is keg-only.
@@ -128,16 +130,101 @@ ensure_ffmpeg_in_path()
 _WHISPER_MODEL = None
 
 
+class _FasterWhisperAdapter:
+    """
+    Adapter that gives faster-whisper the same `.transcribe(...)` shape as
+    openai-whisper, so the rest of the engine keeps working unchanged.
+    Runs fully offline (model is cached locally after first download).
+    """
+
+    def __init__(self, model_size: str = "base"):
+        from faster_whisper import WhisperModel
+        # int8 keeps it light on CPU; no CUDA/torch required.
+        self._model = WhisperModel(model_size, device="cpu", compute_type="int8")
+
+    @staticmethod
+    def _decode_audio_via_ffmpeg(audio, sampling_rate: int = 16000):
+        """Decode any media file to a 16 kHz mono float32 numpy array using ffmpeg.
+
+        faster-whisper's own decoder goes through PyAV, and some PyAV builds
+        reject the `metadata_errors` kwarg it passes, which breaks transcription
+        for every local source. Decoding with ffmpeg first sidesteps PyAV
+        entirely and works uniformly for uploads, Google Drive and film sites.
+        """
+        import numpy as np
+        cmd = [
+            "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+            "-i", str(audio),
+            "-f", "f32le", "-ac", "1", "-ar", str(sampling_rate),
+            "-",
+        ]
+        try:
+            proc = subprocess.run(cmd, capture_output=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"ffmpeg audio pre-decode failed: {exc}")
+            return None
+        if proc.returncode != 0 or not proc.stdout:
+            logger.warning(
+                "ffmpeg audio pre-decode produced no samples; falling back to "
+                "faster-whisper's built-in decoder."
+            )
+            return None
+        audio_np = np.frombuffer(proc.stdout, dtype=np.float32)
+        if audio_np.size == 0:
+            return None
+        return audio_np
+
+    def transcribe(self, audio, word_timestamps=False, fp16=False, verbose=False,
+                   initial_prompt=None, language=None, **kwargs):
+        # Pre-decode with ffmpeg so we never depend on PyAV's `av.open` signature.
+        audio_input = audio
+        if isinstance(audio, (str, bytes)) or hasattr(audio, "__fspath__"):
+            decoded = self._decode_audio_via_ffmpeg(audio)
+            if decoded is not None:
+                audio_input = decoded
+        seg_iter, info = self._model.transcribe(
+            audio_input,
+            word_timestamps=bool(word_timestamps),
+            initial_prompt=initial_prompt,
+            vad_filter=True,
+            beam_size=5,
+            condition_on_previous_text=False,
+        )
+        segments = []
+        for seg in seg_iter:
+            words = []
+            for w in (getattr(seg, "words", None) or []):
+                words.append({
+                    "word": w.word,
+                    "start": float(w.start or 0.0),
+                    "end": float(w.end or 0.0),
+                })
+            segments.append({
+                "start": float(seg.start or 0.0),
+                "end": float(seg.end or 0.0),
+                "text": seg.text or "",
+                "words": words,
+            })
+        return {"segments": segments, "language": getattr(info, "language", "")}
+
+
 def get_whisper_model():
     global _WHISPER_MODEL
     if _WHISPER_MODEL is None:
+        # Prefer the lightweight offline engine (faster-whisper); fall back to
+        # openai-whisper when it is the only one installed.
         try:
-            import whisper
-            logger.info("Loading Whisper 'base' model for word-level timestamps...")
-            _WHISPER_MODEL = whisper.load_model("base")
-        except Exception as e:
-            logger.warning(f"Could not load Whisper model: {e}")
-            _WHISPER_MODEL = False
+            logger.info("Loading faster-whisper 'base' model (offline, CPU int8)...")
+            _WHISPER_MODEL = _FasterWhisperAdapter("base")
+        except Exception as e_fw:
+            logger.warning(f"faster-whisper unavailable ({e_fw}); trying openai-whisper...")
+            try:
+                import whisper
+                logger.info("Loading Whisper 'base' model for word-level timestamps...")
+                _WHISPER_MODEL = whisper.load_model("base")
+            except Exception as e:
+                logger.warning(f"Could not load Whisper model: {e}")
+                _WHISPER_MODEL = False
     return _WHISPER_MODEL if _WHISPER_MODEL is not False else None
 
 
@@ -545,6 +632,78 @@ def transcribe_local_video_file(file_path: Union[str, Path], progress_callback=N
     return transcript_lines
 
 
+# ---------------------------------------------------------------------------
+# Full-video cache + local slicing fallback
+# ---------------------------------------------------------------------------
+# YouTube's `--download-sections` (with --force-keyframes-at-cuts) sometimes
+# produces truncated files without a moov atom, and the direct-stream FFmpeg
+# fallbacks get HTTP 403 in guest mode. The most reliable recovery is to
+# download the WHOLE video once (a normal, well-tested yt-dlp path), cache it,
+# and slice every requested segment locally with FFmpeg. The cache is reused
+# across all clips of a batch so the video is only fetched once.
+FULL_CACHE_DIR = TEMP_DIR / "full_cache"
+FULL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _extract_video_cache_key(video_url: str) -> str:
+    """Builds a stable, filesystem-safe cache key for a source video URL."""
+    m = re.search(r'(?:v=|youtu\.be/|/shorts/|/embed/|/live/)([A-Za-z0-9_-]{6,})', video_url or "")
+    if m:
+        return m.group(1)
+    cleaned = re.sub(r'[^A-Za-z0-9_-]', '_', (video_url or "video"))
+    return cleaned[-60:] or "video"
+
+
+def get_or_download_full_cached_video(
+    video_url: str,
+    base_cmd: List[str],
+    timeout_sec: int = 900,
+) -> Optional[str]:
+    """
+    Returns a path to a cached full copy of `video_url`, downloading it once if
+    needed. Used as the last-resort fallback so short clip segments can be
+    sliced locally instead of relying on fragile YouTube section downloads.
+    """
+    key = _extract_video_cache_key(video_url)
+    cache_path = FULL_CACHE_DIR / f"{key}.mp4"
+
+    if cache_path.exists() and is_valid_mp4(cache_path):
+        logger.info(f"Reusing cached full video for {key}: {cache_path}")
+        return str(cache_path)
+
+    cmd = [
+        *base_cmd,
+        "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
+        "--merge-output-format", "mp4",
+        "-N", "4",
+        "--socket-timeout", "20",
+        "--fragment-retries", "5",
+        "--retries", "5",
+        "-o", str(cache_path),
+        "--no-warnings",
+        video_url,
+    ]
+    full_timeout = max(600, min(1800, timeout_sec * 2))
+    logger.info(f"Downloading full source video to cache (key={key}, timeout={full_timeout}s)...")
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=full_timeout)
+        if res.returncode == 0 and is_valid_mp4(cache_path):
+            logger.info(f"Cached full video {key}: {cache_path} ({cache_path.stat().st_size} bytes)")
+            return str(cache_path)
+        logger.warning(f"Full-video cache download failed (rc={res.returncode}): {(res.stderr or '')[:200]}")
+    except subprocess.TimeoutExpired:
+        logger.warning(f"Full-video cache download timed out after {full_timeout}s for {key}")
+    except Exception as e:
+        logger.warning(f"Full-video cache download error for {key}: {e}")
+
+    if cache_path.exists():
+        try:
+            cache_path.unlink()
+        except Exception:
+            pass
+    return None
+
+
 def download_clip_segment(
     video_url: str,
     start_time: float,
@@ -846,6 +1005,51 @@ def download_clip_segment(
                 last_err_snippet = res_480p.stderr[:300]
         except Exception as e:
             logger.warning(f"480p fallback failed ({mode_label}): {e}")
+            if output_path.exists():
+                try:
+                    output_path.unlink()
+                except Exception:
+                    pass
+            last_err_snippet = str(e)
+
+        # Method 5: Last resort - download the WHOLE video once (cached) and
+        # slice the requested section locally with FFmpeg. This bypasses the
+        # fragile `--download-sections` path entirely and is reused across all
+        # clips of the same batch, so it only downloads the source once.
+        logger.info(f"Method 5: Full-video cache + local FFmpeg slice fallback for {clean_url} ({mode_label})...")
+        try:
+            if output_path.exists():
+                try:
+                    output_path.unlink()
+                except Exception:
+                    pass
+            cached_full = get_or_download_full_cached_video(clean_url, base_cmd, timeout_sec)
+            if cached_full and os.path.exists(cached_full):
+                slice_timeout = max(180, min(900, int(clip_duration * 6) + 90))
+                slice_cmd = [
+                    "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                    "-ss", str(start_time),
+                    "-to", str(end_time),
+                    "-i", str(cached_full),
+                    *ACTIVE_ENCODER_ARGS,
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-avoid_negative_ts", "make_zero",
+                    "-movflags", "+faststart",
+                    str(output_path)
+                ]
+                slice_res = subprocess.run(slice_cmd, capture_output=True, text=True, timeout=slice_timeout)
+                if slice_res.returncode == 0 and is_valid_mp4(output_path):
+                    logger.info(f"Successfully sliced from cached full video ({mode_label}): {output_path} ({output_path.stat().st_size} bytes)")
+                    return str(output_path)
+                if output_path.exists():
+                    try:
+                        output_path.unlink()
+                    except Exception:
+                        pass
+                last_err_snippet = slice_res.stderr[:300] if (slice_res and slice_res.stderr) else "local slice from cached full video failed"
+        except Exception as e:
+            logger.warning(f"Full-video cache + local slice fallback failed ({mode_label}): {e}")
             if output_path.exists():
                 try:
                     output_path.unlink()

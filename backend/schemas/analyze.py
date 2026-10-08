@@ -29,10 +29,12 @@ class VideoAnalysis(BaseModel):
     clips: List[ViralClipGemini] = Field(description="List of viral clip candidates, sorted by virality_score desc")
 
 class AnalyzeRequest(BaseModel):
-    url: str = Field(..., description="YouTube video URL")
+    url: str = Field(..., description="YouTube video URL, direct video link, or any site yt-dlp supports (streaming/film sites included)")
     duration: str = Field("30s", description="Target clip duration: '15s', '30s', '60s', or 'auto'")
-    api_key: Optional[str] = Field(None, description="Optional custom Gemini API key provided by the user")
-    model: Optional[str] = Field("gemini-2.5-flash", description="Preferred Gemini model name")
+    api_key: Optional[str] = Field(None, description="Optional custom API key provided by the user (Gemini or any OpenAI-compatible provider such as 9router)")
+    model: Optional[str] = Field("gemini-2.5-flash", description="Preferred model name")
+    provider: Optional[str] = Field("gemini", description="AI provider: 'gemini' for Google Gemini, or 'openai' for any OpenAI-compatible endpoint (e.g. 9router)")
+    base_url: Optional[str] = Field(None, description="Base URL for the OpenAI-compatible provider, e.g. http://localhost:20128/v1 (9router). Ignored for Gemini.")
     custom_prompt: Optional[str] = Field(None, description="Optional custom focus prompt for clips search")
     range_start: Optional[float] = Field(None, description="Search range start in seconds")
     range_end: Optional[float] = Field(None, description="Search range end in seconds")
@@ -40,6 +42,8 @@ class AnalyzeRequest(BaseModel):
     subtitles_filename: Optional[str] = Field(None, description="Optional manual subtitles filename")
     target_clip_count: Optional[Union[int, str]] = Field(None, description="Optional target number of clips or 'auto'")
     proxy: Optional[str] = Field(None, description="Optional custom proxy URL")
+    transcript_language: Optional[str] = Field(None, description="Language code (or 'auto') to translate the transcript into, e.g. 'id', 'en', 'ja'. 'auto' keeps the original language.")
+    title_language: Optional[str] = Field(None, description="Language code (or 'auto') the clip titles / summary should be written in, e.g. 'id', 'en', 'ja'. 'auto' keeps the video's own language.")
 
 class HeatmapPoint(BaseModel):
     start_time: float
@@ -64,3 +68,20 @@ class AnalyzeResponse(BaseModel):
     model: Optional[str] = None
     video_url: Optional[str] = None
     source_type: Optional[str] = "youtube"
+
+
+class TranslateRequest(BaseModel):
+    """Translate an existing transcript (and optionally clip titles) on demand."""
+    transcript: List[TranscriptLine] = Field(default_factory=list, description="Transcript lines to translate")
+    target_language: str = Field(..., description="Language code (or name) to translate the transcript into, e.g. 'id', 'en', 'ja'")
+    api_key: Optional[str] = Field(None, description="Optional custom API key (Gemini or OpenAI-compatible provider)")
+    model: Optional[str] = Field("gemini-2.5-flash", description="Preferred model name")
+    provider: Optional[str] = Field("gemini", description="AI provider: 'gemini' or 'openai'")
+    base_url: Optional[str] = Field(None, description="Base URL for OpenAI-compatible providers, e.g. http://localhost:20128/v1")
+    source_language: Optional[str] = Field(None, description="Optional source language code/name; used only as a hint")
+
+
+class TranslateResponse(BaseModel):
+    transcript: List[TranscriptLine]
+    target_language: str
+    language_name: Optional[str] = None

@@ -63,3 +63,93 @@ export async function resilientFetch(
   }
   throw lastError || new Error(`Failed to fetch ${String(input)} after ${maxRetries + 1} attempts`);
 }
+
+// --------------------------------------------------------------------------- //
+//  Live broadcast helpers
+// --------------------------------------------------------------------------- //
+
+export interface LiveProbeResult {
+  ok: boolean;
+  error?: string;
+  title?: string;
+  channel?: string;
+  duration?: number;
+  is_live?: boolean;
+  live_status?: string;
+  was_live?: boolean;
+  thumbnail?: string;
+  webpage_url?: string;
+}
+
+export interface LiveRecordStatus {
+  job_id: string;
+  status: 'starting' | 'recording' | 'finishing' | 'stopping' | 'ready' | 'stopped' | 'failed';
+  title?: string;
+  from_start?: boolean;
+  elapsed?: number;
+  downloaded_bytes?: number;
+  total_bytes?: number;
+  speed?: number;
+  filename?: string;
+  file_path?: string;
+  video_url?: string;
+  video_id?: string;
+  size_bytes?: number;
+  error?: string;
+}
+
+/** Checks whether a pasted link is a live broadcast. Never throws — returns ok:false on failure. */
+export async function probeLive(url: string): Promise<LiveProbeResult> {
+  try {
+    const res = await fetch('/api/live/probe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      return { ok: false, error: j.detail || `HTTP ${res.status}` };
+    }
+    return await res.json();
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Network error' };
+  }
+}
+
+/** Starts a background recording of a live broadcast. */
+export async function startLiveRecord(
+  url: string,
+  fromStart: boolean = false,
+  title?: string
+): Promise<{ job_id: string; status: string; filename: string }> {
+  const res = await fetch('/api/live/record/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, from_start: fromStart, title }),
+  });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j.detail || `Failed to start recording (HTTP ${res.status})`);
+  }
+  return await res.json();
+}
+
+/** Polls the status of a running recording job. */
+export async function getLiveRecordStatus(jobId: string): Promise<LiveRecordStatus> {
+  const res = await fetch(`/api/live/record/status/${jobId}`);
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j.detail || `HTTP ${res.status}`);
+  }
+  return await res.json();
+}
+
+/** Stops a running recording; the backend finalizes the file. */
+export async function stopLiveRecord(jobId: string): Promise<LiveRecordStatus> {
+  const res = await fetch(`/api/live/record/stop/${jobId}`, { method: 'POST' });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j.detail || `HTTP ${res.status}`);
+  }
+  return await res.json();
+}

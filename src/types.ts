@@ -34,7 +34,7 @@ export interface AnalyzeResponse {
   transcript?: TranscriptLine[];
   model?: string;
   video_url?: string;
-  source_type?: 'youtube' | 'upload' | 'gdrive';
+  source_type?: 'youtube' | 'upload' | 'gdrive' | 'site';
 }
 
 export type AspectRatioOption = '9:16' | '1:1' | '4:3' | '16:9' | '16:9_landscape';

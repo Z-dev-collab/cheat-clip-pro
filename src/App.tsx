@@ -5,7 +5,8 @@ import { ClipStudioSection } from './components/ClipStudioSection';
 import { CookiesModal } from './components/CookiesModal';
 import { ClipTrimmerModal } from './components/ClipTrimmerModal';
 import { AppUpdateModal } from './components/AppUpdateModal';
-import { resilientFetch } from './utils/api';
+import { resilientFetch, probeLive, startLiveRecord, getLiveRecordStatus, stopLiveRecord } from './utils/api';
+import type { LiveProbeResult, LiveRecordStatus } from './utils/api';
 import { useLanguage } from './locales';
 import type { AnalyzeResponse, ViralClip, RenderSettings, BatchRenderProgress } from './types';
 
@@ -36,12 +37,42 @@ export default function App() {
   const [isUploadingVideo, setIsUploadingVideo] = useState(false);
   const [isDragOverVideo, setIsDragOverVideo] = useState(false);
   const videoFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // ---- Live broadcast state (the one thing this fork adds) ----
+  const [liveProbe, setLiveProbe] = useState<LiveProbeResult | null>(null);
+  const [liveChecking, setLiveChecking] = useState(false);
+  const [liveFromStart, setLiveFromStart] = useState(false);
+  const [liveJob, setLiveJob] = useState<LiveRecordStatus | null>(null);
+  const [liveRecording, setLiveRecording] = useState(false);
+  const [liveWarningOpen, setLiveWarningOpen] = useState(false);
+  const livePollRef = useRef<number | null>(null);
+  const liveDebounceRef = useRef<number | null>(null);
+  const liveProbeSeqRef = useRef<number>(0);
   const [durationPref, setDurationPref] = useState<'15s' | '30s' | '60s' | 'auto'>(() => {
     const saved = localStorage.getItem('cheat_clip_duration_pref');
     if (saved === '15s' || saved === '30s' || saved === '60s' || saved === 'auto') return saved;
     return '30s';
   });
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem('cheat_clip_gemini_api_key') || '');
+  const [provider, setProvider] = useState<'gemini' | 'openai'>(() => {
+    const saved = localStorage.getItem('cheat_clip_ai_provider');
+    return saved === 'openai' ? 'openai' : 'gemini';
+  });
+  // Gemini and 9router/OpenAI API keys live in SEPARATE storage slots, so switching
+  // providers never overwrites the other one's key.
+  const [apiKey, setApiKey] = useState(() => {
+    const savedProvider = localStorage.getItem('cheat_clip_ai_provider') === 'openai' ? 'openai' : 'gemini';
+    const slot = savedProvider === 'openai' ? 'cheat_clip_9router_api_key' : 'cheat_clip_gemini_api_key';
+    const own = localStorage.getItem(slot) || '';
+    if (own) return own;
+    // One-time migration: older builds stored the OpenAI/9router key in the Gemini slot.
+    const legacy = localStorage.getItem('cheat_clip_gemini_api_key') || '';
+    if (savedProvider === 'openai' && legacy) {
+      localStorage.setItem('cheat_clip_9router_api_key', legacy);
+      return legacy;
+    }
+    return '';
+  });
+  const [baseUrl, setBaseUrl] = useState(() => localStorage.getItem('cheat_clip_ai_base_url') || 'http://localhost:20128/v1');
   const [showApiKey, setShowApiKey] = useState(false);
   const [isCookiesModalOpen, setIsCookiesModalOpen] = useState(false);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
@@ -86,6 +117,12 @@ export default function App() {
     const saved = localStorage.getItem('cheat_clip_clip_count_mode');
     return (saved === 'auto' || saved === 'custom') ? saved : 'auto';
   });
+
+  // Transcript & title output language ("auto" = keep the video's own language)
+  const [transcriptLanguage, setTranscriptLanguage] = useState<string>(() => localStorage.getItem('cheat_clip_transcript_language') || 'auto');
+  const [titleLanguage, setTitleLanguage] = useState<string>(() => localStorage.getItem('cheat_clip_title_language') || 'auto');
+  const [languages, setLanguages] = useState<{ code: string; name: string }[]>([{ code: 'auto', name: 'Auto (same as video)' }]);
+  const [translatingTranscript, setTranslatingTranscript] = useState(false);
 
   // Custom range selection states
   const [rangeType, setRangeType] = useState<'entire' | 'custom'>('entire');
@@ -178,6 +215,157 @@ export default function App() {
       window.removeEventListener('focus', onFocus);
     };
   }, []);
+
+  // Load the full list of supported output languages once on mount
+  useEffect(() => {
+    let isMounted = true;
+    const loadLanguages = async () => {
+      try {
+        const res = await resilientFetch('/api/languages', { maxRetries: 3, retryDelay: 800, silent: true });
+        if (res.ok) {
+          const data = await res.json();
+          if (isMounted && Array.isArray(data?.languages) && data.languages.length > 0) {
+            setLanguages(data.languages);
+          }
+        }
+      } catch {
+        // Backend still booting; keep the default ['auto'] option
+      }
+    };
+    loadLanguages();
+    return () => { isMounted = false; };
+  }, []);
+
+
+  const runLiveProbe = useCallback((rawUrl: string) => {
+    const u = (rawUrl || '').trim();
+    if (!u) {
+      setLiveProbe(null);
+      setLiveChecking(false);
+      return;
+    }
+    const seq = ++liveProbeSeqRef.current;
+    setLiveChecking(true);
+    probeLive(u).then((res) => {
+      // Ignore stale responses (user kept typing / pasted a newer link)
+      if (seq !== liveProbeSeqRef.current) return;
+      setLiveChecking(false);
+      if (res && res.ok && (res.is_live || res.live_status === 'is_live' || res.live_status === 'is_upcoming')) {
+        setLiveProbe(res);
+      } else {
+        setLiveProbe(null);
+      }
+    });
+  }, []);
+
+  // Debounced probe whenever the pasted YouTube link changes
+  useEffect(() => {
+    if (sourceMode !== 'youtube') {
+      setLiveProbe(null);
+      return;
+    }
+    const u = url.trim();
+    if (!u) {
+      setLiveProbe(null);
+      setLiveChecking(false);
+      return;
+    }
+    if (liveDebounceRef.current !== null) window.clearTimeout(liveDebounceRef.current);
+    liveDebounceRef.current = window.setTimeout(() => runLiveProbe(u), 700);
+    return () => {
+      if (liveDebounceRef.current !== null) window.clearTimeout(liveDebounceRef.current);
+    };
+  }, [url, sourceMode, runLiveProbe]);
+
+  const stopLivePolling = useCallback(() => {
+    if (livePollRef.current !== null) {
+      window.clearInterval(livePollRef.current);
+      livePollRef.current = null;
+    }
+  }, []);
+
+  const finishLiveRecording = useCallback((status: LiveRecordStatus) => {
+    stopLivePolling();
+    setLiveRecording(false);
+    setLiveJob(status);
+
+    if (status.status === 'ready' && status.video_url) {
+      // Turn the recording into a normal local video so the entire existing
+      // pipeline (AI analysis, Clip Studio, subtitles, rendering) works on it.
+      const savedName = status.filename || status.video_url.replace('/api/video/', '');
+      const newInfo = {
+        videoId: status.video_id || savedName.replace(/\.[^.]+$/, ''),
+        filename: status.title || savedName,
+        savedName,
+        duration: status.elapsed || 0,
+        videoUrl: status.video_url,
+        filePath: status.file_path || '',
+        width: 1920,
+        height: 1080,
+      };
+      setSourceMode('upload');
+      setUploadedVideoFile(null);
+      setUploadedVideoInfo(newInfo);
+      setUrl('');
+      setLiveProbe(null);
+      setToastMessage(t.form.liveRecorded);
+      setTimeout(() => setToastMessage(null), 4000);
+    } else if (status.status === 'failed') {
+      setToastMessage(`${t.form.liveRecFailed} ${status.error || ''}`.trim());
+      setTimeout(() => setToastMessage(null), 5000);
+    } else if (status.status === 'stopped') {
+      setToastMessage(t.form.liveRecEmpty);
+      setTimeout(() => setToastMessage(null), 5000);
+    }
+  }, [stopLivePolling, t]);
+
+  const beginLiveRecording = useCallback(async () => {
+    const u = url.trim();
+    if (!u) return;
+    setLiveWarningOpen(false);
+    setError(null);
+    setLiveRecording(true);
+    setLiveJob(null);
+    try {
+      const started = await startLiveRecord(u, liveFromStart, liveProbe?.title);
+      const poll = window.setInterval(async () => {
+        try {
+          const st = await getLiveRecordStatus(started.job_id);
+          setLiveJob(st);
+          if (st.status === 'ready' || st.status === 'failed' || st.status === 'stopped') {
+            finishLiveRecording(st);
+          }
+        } catch (e) {
+          // transient poll error: keep trying
+        }
+      }, 1000);
+      livePollRef.current = poll;
+    } catch (e: any) {
+      setLiveRecording(false);
+      setError(e?.message || t.form.liveRecFailed);
+    }
+  }, [url, liveFromStart, liveProbe, finishLiveRecording, t]);
+
+  const haltLiveRecording = useCallback(async () => {
+    if (!liveJob?.job_id) {
+      stopLivePolling();
+      setLiveRecording(false);
+      return;
+    }
+    try {
+      const st = await stopLiveRecord(liveJob.job_id);
+      setLiveJob(st);
+    } catch (e) {
+      // backend will finalize anyway; polling picks up the final state
+    }
+  }, [liveJob, stopLivePolling]);
+
+  // Clean up the poller if the component unmounts mid-recording
+  useEffect(() => {
+    return () => {
+      stopLivePolling();
+    };
+  }, [stopLivePolling]);
 
   // Results
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
@@ -431,7 +619,7 @@ export default function App() {
     analyzed_at: string;
     thumbnail: string;
     url: string;
-    source_type?: 'youtube' | 'upload' | 'gdrive';
+    source_type?: 'youtube' | 'upload' | 'gdrive' | 'site';
     video_url?: string;
     range_suffix?: string;
     summary?: string;
@@ -556,13 +744,20 @@ export default function App() {
   useEffect(() => {
     const fetchModels = async () => {
       const cleanKey = apiKey.trim();
-      if (!cleanKey || cleanKey.length < 20 || cleanKey.toLowerCase() === 'mock') {
+      const isOpenAI = provider === 'openai';
+      // OpenAI-compatible endpoints (e.g. a local 9router) may need no key at all,
+      // so only the Gemini path requires a key here.
+      if (!isOpenAI && (!cleanKey || cleanKey.length < 20 || cleanKey.toLowerCase() === 'mock')) {
         setAvailableModels([]);
         return;
       }
       setLoadingModels(true);
       try {
-        const res = await resilientFetch(`/api/models?api_key=${encodeURIComponent(cleanKey)}`, {
+        const qs = new URLSearchParams();
+        if (cleanKey) qs.set('api_key', cleanKey);
+        qs.set('provider', provider);
+        if (isOpenAI) qs.set('base_url', baseUrl.trim());
+        const res = await resilientFetch(`/api/models?${qs.toString()}`, {
           maxRetries: 3,
           retryDelay: 800,
           silent: true
@@ -571,11 +766,16 @@ export default function App() {
           const data = await res.json();
           if (data.models && data.models.length > 0) {
             setAvailableModels(data.models);
-            if (!data.models.includes(selectedModel) || selectedModel.includes('1.5') || selectedModel.includes('1.0')) {
-              const fallback = data.models.find((m: string) => m.includes('flash')) || data.models[0] || 'gemini-2.5-flash';
+            const isStale = !data.models.includes(selectedModel) || selectedModel.includes('1.5') || selectedModel.includes('1.0');
+            if (isStale) {
+              const fallback = isOpenAI
+                ? (data.models.find((m: string) => m.toLowerCase().includes('hermesagent')) || data.models[0])
+                : (data.models.find((m: string) => m.includes('flash')) || data.models[0] || 'gemini-2.5-flash');
               setSelectedModel(fallback);
               localStorage.setItem('cheat_clip_selected_model', fallback);
             }
+          } else {
+            setAvailableModels([]);
           }
         }
       } catch (err) {
@@ -590,7 +790,7 @@ export default function App() {
     }, 600);
 
     return () => clearTimeout(delayDebounce);
-  }, [apiKey]);
+  }, [apiKey, provider, baseUrl]);
 
   // Sync marked clips with local storage based on active video ID
   useEffect(() => {
@@ -670,8 +870,9 @@ export default function App() {
           const key_quotes = (data.clips || []).flatMap((c: any) => c.key_quotes || []).filter(Boolean);
 
           const isGDrive = data.source_type === 'gdrive' || video_id.startsWith('gdrive_');
+          const isSite = data.source_type === 'site' || video_id.startsWith('site_');
           const isUpload = data.source_type === 'upload' || video_id.startsWith('upload_');
-          const sourceType: 'youtube' | 'upload' | 'gdrive' = isGDrive ? 'gdrive' : (isUpload ? 'upload' : 'youtube');
+          const sourceType: 'youtube' | 'upload' | 'gdrive' | 'site' = isGDrive ? 'gdrive' : (isSite ? 'site' : (isUpload ? 'upload' : 'youtube'));
 
           // Determine appropriate link and thumbnail
           let itemUrl = `https://www.youtube.com/watch?v=${video_id}`;
@@ -679,11 +880,11 @@ export default function App() {
             const gdriveIdMatch = video_id.match(/gdrive_([a-zA-Z0-9_-]+)/);
             const gdriveId = gdriveIdMatch ? gdriveIdMatch[1] : '';
             itemUrl = gdriveId ? `https://drive.google.com/file/d/${gdriveId}/view` : (data.video_url || '');
-          } else if (isUpload) {
+          } else if (isUpload || isSite) {
             itemUrl = data.video_url || `/api/video/${video_id}`;
           }
 
-          const thumb = (isGDrive || isUpload)
+          const thumb = (isGDrive || isUpload || isSite)
             ? `/api/frame/${encodeURIComponent(video_id)}?t=2`
             : `https://img.youtube.com/vi/${video_id}/mqdefault.jpg`;
 
@@ -726,6 +927,7 @@ export default function App() {
       const data: AnalyzeResponse = JSON.parse(raw);
 
       const isGDrive = data.source_type === 'gdrive' || entry.source_type === 'gdrive' || entry.video_id.startsWith('gdrive_');
+      const isSite = data.source_type === 'site' || entry.source_type === 'site' || entry.video_id.startsWith('site_');
       const isUpload = data.source_type === 'upload' || entry.source_type === 'upload' || entry.video_id.startsWith('upload_');
 
       if (isGDrive) {
@@ -738,6 +940,23 @@ export default function App() {
           : (gdriveId ? `https://drive.google.com/file/d/${gdriveId}/view` : entry.video_id);
         setGdriveUrl(targetGDriveUrl);
         setUploadedVideoInfo(null);
+        setUploadedVideoFile(null);
+      } else if (isSite) {
+        // A film/streaming-site clip: reuse the locally downloaded file, and keep
+        // the original page link around for context.
+        setSourceMode('upload');
+        setUrl('');
+        setGdriveUrl('');
+        setUploadedVideoInfo({
+          videoId: data.video_id,
+          filename: data.title || data.video_id,
+          savedName: data.video_url?.replace('/api/video/', '') || data.video_id,
+          duration: data.duration,
+          videoUrl: data.video_url || `/api/video/${data.video_id}`,
+          filePath: '',
+          width: 1080,
+          height: 1920
+        });
         setUploadedVideoFile(null);
       } else if (isUpload) {
         setSourceMode('upload');
@@ -1103,10 +1322,18 @@ export default function App() {
       }
     } else {
       if (!url.trim()) return;
+
+      // A live link can't be analyzed directly — offer to record it first so it
+      // becomes a normal local video (this fork's added capability).
+      if (liveProbe && (liveProbe.is_live || liveProbe.live_status === 'is_live')) {
+        setLiveWarningOpen(true);
+        return;
+      }
     }
 
-    // Require an API key before making any request
-    if (!apiKey.trim()) {
+    // Require an API key before making any request (unless using an OpenAI-compatible
+    // endpoint such as a local 9router, which may not need a key at all)
+    if (provider !== 'openai' && !apiKey.trim()) {
       setError(t.errors.apiKeyRequired);
       return;
     }
@@ -1287,12 +1514,16 @@ export default function App() {
           duration: durationPref,
           api_key: apiKey.trim() || undefined,
           model: selectedModel,
+          provider: provider,
+          base_url: provider === 'openai' ? baseUrl.trim() : undefined,
           custom_prompt: customPrompt.trim() || undefined,
           range_start: rangeStartSecs,
           range_end: rangeEndSecs,
           subtitles: subtitlesSource === 'manual' ? manualSubtitlesContent : undefined,
           subtitles_filename: subtitlesSource === 'manual' ? manualSubtitlesFileName : undefined,
           target_clip_count: clipCountMode === 'auto' ? 'auto' : targetClipCount,
+          transcript_language: transcriptLanguage !== 'auto' ? transcriptLanguage : undefined,
+          title_language: titleLanguage !== 'auto' ? titleLanguage : undefined,
         }),
       });
 
@@ -1475,7 +1706,9 @@ export default function App() {
       result.video_url ||
       result.source_type === 'upload' ||
       result.source_type === 'gdrive' ||
+      result.source_type === 'site' ||
       result.video_id?.startsWith('upload_') ||
+      result.video_id?.startsWith('site_') ||
       result.video_id?.startsWith('gdrive_')
     );
     if (isDirect) {
@@ -1936,6 +2169,42 @@ Transcript:
     setTimeout(() => setToastMessage(null), 3000);
   };
 
+  const handleTranslateTranscript = async (targetLang: string) => {
+    if (!result || !result.transcript || result.transcript.length === 0) return;
+    setTranslatingTranscript(true);
+    try {
+      const res = await resilientFetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transcript: result.transcript.map(l => ({ start: l.start, end: l.end, text: l.text, engagement: l.engagement })),
+          target_language: targetLang,
+          source_language: undefined,
+          api_key: apiKey.trim() || undefined,
+          model: selectedModel,
+          provider: provider,
+          base_url: provider === 'openai' ? baseUrl.trim() : undefined,
+        }),
+        maxRetries: 1,
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody?.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      if (Array.isArray(data?.transcript)) {
+        setResult(prev => prev ? { ...prev, transcript: data.transcript } : prev);
+        setToastMessage(t.results.transcriptTranslatedToast(data.language_name || targetLang));
+        setTimeout(() => setToastMessage(null), 3500);
+      }
+    } catch (err: any) {
+      setToastMessage(t.results.translateFailedToast(err?.message || String(err)));
+      setTimeout(() => setToastMessage(null), 5000);
+    } finally {
+      setTranslatingTranscript(false);
+    }
+  };
+
   const handleCopyAllMarkdown = () => {
     if (!result) return;
     let md = `# Viral Clips from "${result.title}"\n\n`;
@@ -2196,18 +2465,21 @@ Transcript:
                 gap: '0.5rem',
                 padding: '0.55rem 1.1rem',
                 borderRadius: '10px',
-                border: sourceMode === 'youtube' ? '1px solid rgba(239, 68, 68, 0.4)' : '1px solid rgba(255,255,255,0.08)',
-                background: sourceMode === 'youtube' ? 'linear-gradient(135deg, rgba(239, 68, 68, 0.2) 0%, rgba(220, 38, 38, 0.08) 100%)' : 'rgba(255,255,255,0.03)',
+                border: sourceMode === 'youtube' ? '1px solid rgba(139, 92, 246, 0.45)' : '1px solid rgba(255,255,255,0.08)',
+                background: sourceMode === 'youtube' ? 'linear-gradient(135deg, rgba(139, 92, 246, 0.22) 0%, rgba(109, 40, 217, 0.08) 100%)' : 'rgba(255,255,255,0.03)',
                 color: sourceMode === 'youtube' ? '#fff' : 'var(--text-secondary)',
                 cursor: 'pointer',
                 fontWeight: 600,
                 fontSize: '0.85rem',
                 transition: 'all 0.2s ease',
-                boxShadow: sourceMode === 'youtube' ? '0 0 15px rgba(239, 68, 68, 0.2)' : 'none'
+                boxShadow: sourceMode === 'youtube' ? '0 0 15px rgba(139, 92, 246, 0.22)' : 'none'
               }}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style={{ color: '#ef4444' }}>
-                <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#8b5cf6' }}>
+                <circle cx="12" cy="12" r="9.5"></circle>
+                <path d="M2.5 12h19"></path>
+                <path d="M12 2.5a14.5 14.5 0 0 1 3.8 9.5 14.5 14.5 0 0 1-3.8 9.5 14.5 14.5 0 0 1-3.8-9.5A14.5 14.5 0 0 1 12 2.5z"></path>
+                <path d="M10.4 9.1v5.8l4.8-2.9z" fill="currentColor" stroke="none"></path>
               </svg>
               {t.form.tabYoutube}
             </button>
@@ -2285,7 +2557,32 @@ Transcript:
           {/* YouTube input mode */}
           {sourceMode === 'youtube' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', width: '100%' }}>
-              <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.form.urlLabel}</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.form.urlLabel}</label>
+                {liveChecking && (
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" style={{ animation: 'spin 1s linear infinite' }}>
+                      <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
+                    </svg>
+                    {t.form.liveDetecting}
+                  </span>
+                )}
+                {liveProbe && !liveChecking && (
+                  <span style={{
+                    fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.03em',
+                    padding: '0.2rem 0.6rem', borderRadius: '999px',
+                    color: '#fff', display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+                    background: liveProbe.live_status === 'is_upcoming'
+                      ? 'linear-gradient(135deg,#f59e0b,#d97706)'
+                      : 'linear-gradient(135deg,#ef4444,#b91c1c)',
+                    boxShadow: '0 0 14px rgba(239,68,68,0.45)',
+                    animation: liveProbe.live_status === 'is_upcoming' ? 'none' : 'pulse 1.6s ease-in-out infinite'
+                  }}>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#fff', display: 'inline-block' }}></span>
+                    {liveProbe.live_status === 'is_upcoming' ? t.form.livePremiere : t.form.liveBadge}
+                  </span>
+                )}
+              </div>
               <div className="form-main-input-row" style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
                 <input
                   id="youtube-url-input"
@@ -2322,6 +2619,91 @@ Transcript:
                   )}
                 </button>
               </div>
+
+              {/* LIVE recording panel — the added streaming capability */}
+              {(liveProbe || liveRecording || (liveJob && liveJob.status !== 'ready')) && (
+                <div style={{
+                  marginTop: '0.35rem',
+                  padding: '1rem 1.1rem',
+                  borderRadius: '12px',
+                  border: '1px solid rgba(239, 68, 68, 0.35)',
+                  background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.12) 0%, rgba(220, 38, 38, 0.04) 100%)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.75rem'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0 }}>
+                    <span style={{ fontSize: '1.15rem' }}>{liveProbe?.live_status === 'is_upcoming' ? '⏳' : '🔴'}</span>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: '0.86rem', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {liveProbe?.title || liveJob?.title || t.form.liveRecTitle}
+                      </div>
+                      <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                        {liveProbe?.channel ? `${liveProbe.channel} • ` : ''}{t.form.liveDetected}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                    {t.form.liveHint}
+                  </div>
+
+                  {liveRecording && liveJob && (
+                    <div style={{ display: 'flex', gap: '1.1rem', flexWrap: 'wrap', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                      <span>⏱️ {t.form.liveElapsed}: <b style={{ color: '#fca5a5' }}>{formatSeconds(liveJob.elapsed || 0)}</b></span>
+                      <span>📦 {t.form.liveSize}: <b style={{ color: '#fca5a5' }}>{((liveJob.downloaded_bytes || 0) / 1048576).toFixed(1)} MB</b></span>
+                      {!!liveJob.speed && <span>⚡ {t.form.liveSpeed}: <b style={{ color: '#fca5a5' }}>{(liveJob.speed / 1024).toFixed(0)} KB/s</b></span>}
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                    {!liveRecording ? (
+                      <>
+                        <button
+                          type="button"
+                          id="live-record-btn"
+                          onClick={() => setLiveWarningOpen(true)}
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+                            padding: '0.6rem 1.3rem', borderRadius: '10px', cursor: 'pointer',
+                            border: '1px solid rgba(239,68,68,0.5)',
+                            background: 'linear-gradient(135deg,#ef4444,#b91c1c)',
+                            color: '#fff', fontWeight: 700, fontSize: '0.84rem',
+                            boxShadow: '0 0 16px rgba(239,68,68,0.35)'
+                          }}
+                        >
+                          <span style={{ width: 9, height: 9, borderRadius: '50%', background: '#fff', display: 'inline-block' }}></span>
+                          {t.form.liveRecord}
+                        </button>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            checked={liveFromStart}
+                            onChange={(e) => setLiveFromStart(e.target.checked)}
+                            style={{ accentColor: '#ef4444' }}
+                          />
+                          {t.form.liveFromStart}
+                        </label>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        id="live-stop-btn"
+                        onClick={haltLiveRecording}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+                          padding: '0.6rem 1.3rem', borderRadius: '10px', cursor: 'pointer',
+                          border: '1px solid rgba(255,255,255,0.25)',
+                          background: 'rgba(255,255,255,0.1)',
+                          color: '#fff', fontWeight: 700, fontSize: '0.84rem'
+                        }}
+                      >
+                        ⏹ {t.form.liveStopRecord}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -2579,24 +2961,92 @@ Transcript:
                 🤖 {t.form.aiSettingsTitle}
               </h3>
               
-              {/* API Key input — required */}
+              {/* Provider selector — Gemini or any OpenAI-compatible endpoint (e.g. 9router) */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                  {t.form.providerLabel}
+                </label>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    type="button"
+                    className={`duration-btn ${provider === 'gemini' ? 'active' : ''}`}
+                    onClick={() => {
+                      setProvider('gemini');
+                      localStorage.setItem('cheat_clip_ai_provider', 'gemini');
+                      setApiKey(localStorage.getItem('cheat_clip_gemini_api_key') || '');
+                    }}
+                    disabled={loading}
+                    style={{ flex: 1 }}
+                  >
+                    ✨ Gemini
+                  </button>
+                  <button
+                    type="button"
+                    className={`duration-btn ${provider === 'openai' ? 'active' : ''}`}
+                    onClick={() => {
+                      setProvider('openai');
+                      localStorage.setItem('cheat_clip_ai_provider', 'openai');
+                      setApiKey(localStorage.getItem('cheat_clip_9router_api_key') || '');
+                    }}
+                    disabled={loading}
+                    style={{ flex: 1 }}
+                  >
+                    🔀 {t.form.providerOpenAI}
+                  </button>
+                </div>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                  {provider === 'openai' ? t.form.providerOpenAIHint : t.form.providerGeminiHint}
+                </span>
+              </div>
+
+              {/* Base URL — only relevant for the OpenAI-compatible provider */}
+              {provider === 'openai' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                    {t.form.baseUrlLabel}
+                  </label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="http://localhost:20128/v1"
+                    value={baseUrl}
+                    onChange={(e) => {
+                      setBaseUrl(e.target.value);
+                      localStorage.setItem('cheat_clip_ai_base_url', e.target.value);
+                    }}
+                    disabled={loading}
+                    style={{ height: '42px' }}
+                  />
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                    {t.form.baseUrlHint}
+                  </span>
+                </div>
+              )}
+
+              {/* API Key input — required for Gemini, optional for OpenAI-compatible endpoints */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 <label style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
                   <span>
-                    {t.form.apiKeyLabel}
-                    <span style={{ marginLeft: '0.4rem', fontSize: '0.7rem', fontWeight: 700, color: '#f87171', background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '4px', padding: '0.1rem 0.35rem', letterSpacing: '0.04em' }}>{t.form.apiKeyRequired}</span>
+                    {provider === 'openai' ? t.form.apiKeyLabelOptional : t.form.apiKeyLabel}
+                    {provider !== 'openai' && (
+                      <span style={{ marginLeft: '0.4rem', fontSize: '0.7rem', fontWeight: 700, color: '#f87171', background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '4px', padding: '0.1rem 0.35rem', letterSpacing: '0.04em' }}>{t.form.apiKeyRequired}</span>
+                    )}
                   </span>
                   <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                    <a
-                      href="https://aistudio.google.com/"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{ color: 'var(--primary)', textDecoration: 'none', fontSize: '0.75rem', fontWeight: 600, transition: 'var(--transition-smooth)' }}
-                      className="action-link-btn"
-                    >
-                      🔑 {t.form.getFreeKey}
-                    </a>
-                    <span style={{ color: 'rgba(255,255,255,0.15)', fontSize: '0.75rem' }}>|</span>
+                    {provider === 'gemini' && (
+                      <>
+                        <a
+                          href="https://aistudio.google.com/"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ color: 'var(--primary)', textDecoration: 'none', fontSize: '0.75rem', fontWeight: 600, transition: 'var(--transition-smooth)' }}
+                          className="action-link-btn"
+                        >
+                          🔑 {t.form.getFreeKey}
+                        </a>
+                        <span style={{ color: 'rgba(255,255,255,0.15)', fontSize: '0.75rem' }}>|</span>
+                      </>
+                    )}
                     <span
                       onClick={() => setShowApiKey(!showApiKey)}
                       style={{ cursor: 'pointer', color: 'var(--primary)', fontSize: '0.75rem' }}
@@ -2608,19 +3058,19 @@ Transcript:
                 <input
                   id="gemini-key-input"
                   type={showApiKey ? 'text' : 'password'}
-                  className={`form-input${!apiKey.trim() ? ' input-error-highlight' : ''}`}
-                  placeholder={t.form.apiKeyPlaceholder}
+                  className={`form-input${provider !== 'openai' && !apiKey.trim() ? ' input-error-highlight' : ''}`}
+                  placeholder={provider === 'openai' ? t.form.apiKeyPlaceholderOptional : t.form.apiKeyPlaceholder}
                   value={apiKey}
                   onChange={(e) => {
                     const val = e.target.value;
                     setApiKey(val);
-                    localStorage.setItem('cheat_clip_gemini_api_key', val);
+                    localStorage.setItem(provider === 'openai' ? 'cheat_clip_9router_api_key' : 'cheat_clip_gemini_api_key', val);
                     if (val.trim()) setError(null);
                   }}
                   disabled={loading}
                   style={{ height: '42px' }}
                 />
-                {!apiKey.trim() && (
+                {provider !== 'openai' && !apiKey.trim() && (
                   <span style={{ fontSize: '0.75rem', color: '#f87171', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
                     {t.form.apiKeyErrorHint}
@@ -2832,6 +3282,57 @@ Transcript:
                 )}
               </div>
             </div>
+          </div>
+
+          {/* Output Language Section: transcript + title translation */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', borderTop: '1px solid var(--border-color)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--primary)' }}>
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="2" y1="12" x2="22" y2="12"></line>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+              </svg>
+              <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.form.outputLanguage}</label>
+            </div>
+            <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', flex: '1 1 220px', minWidth: '180px' }}>
+                <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)' }}>{t.form.transcriptLanguageLabel}</span>
+                <select
+                  className="form-input"
+                  value={transcriptLanguage}
+                  onChange={(e) => {
+                    setTranscriptLanguage(e.target.value);
+                    localStorage.setItem('cheat_clip_transcript_language', e.target.value);
+                  }}
+                  disabled={loading}
+                  style={{ height: '42px', cursor: 'pointer' }}
+                >
+                  {languages.map((lang) => (
+                    <option key={lang.code} value={lang.code}>{lang.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', flex: '1 1 220px', minWidth: '180px' }}>
+                <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)' }}>{t.form.titleLanguageLabel}</span>
+                <select
+                  className="form-input"
+                  value={titleLanguage}
+                  onChange={(e) => {
+                    setTitleLanguage(e.target.value);
+                    localStorage.setItem('cheat_clip_title_language', e.target.value);
+                  }}
+                  disabled={loading}
+                  style={{ height: '42px', cursor: 'pointer' }}
+                >
+                  {languages.map((lang) => (
+                    <option key={lang.code} value={lang.code}>{lang.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.35 }}>
+              🌐 {t.form.outputLanguageTip}
+            </span>
           </div>
 
           {/* Subtitles Source Section */}
@@ -3269,6 +3770,10 @@ Transcript:
                               <span style={{ color: '#3b82f6', opacity: 0.9, fontWeight: 600 }}>
                                 📁 Local Video
                               </span>
+                            ) : entry.source_type === 'site' ? (
+                              <span style={{ color: '#a855f7', opacity: 0.9, fontWeight: 600 }}>
+                                🎬 Film / Site
+                              </span>
                             ) : (
                               <a
                                 href={entry.url}
@@ -3688,7 +4193,7 @@ Transcript:
               <h2 style={{ fontSize: '1.25rem', lineHeight: 1.3 }}>{result.title}</h2>
 
               <div className="video-wrapper" style={{ position: 'relative' }}>
-                {(result.video_url || result.source_type === 'upload' || result.source_type === 'gdrive' || result.video_id?.startsWith('upload_') || result.video_id?.startsWith('gdrive_')) ? (
+                {(result.video_url || result.source_type === 'upload' || result.source_type === 'gdrive' || result.source_type === 'site' || result.video_id?.startsWith('upload_') || result.video_id?.startsWith('site_') || result.video_id?.startsWith('gdrive_')) ? (
                   <video
                     key={`direct-player-${result.video_id}`}
                     ref={directVideoPlayerRef}
@@ -4167,6 +4672,38 @@ Transcript:
                       >
                         {t.results.downloadSrt}
                       </button>
+                      <span style={{ color: 'var(--border-color)' }}>|</span>
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <select
+                          className="form-input"
+                          value={transcriptLanguage}
+                          onChange={(e) => {
+                            setTranscriptLanguage(e.target.value);
+                            localStorage.setItem('cheat_clip_transcript_language', e.target.value);
+                          }}
+                          disabled={translatingTranscript || loading}
+                          title={t.results.retranslateHint}
+                          style={{ padding: '0.2rem 0.4rem', fontSize: '0.74rem', height: '28px', width: 'auto', maxWidth: '190px', cursor: 'pointer' }}
+                        >
+                          {languages.filter(l => l.code !== 'auto').map((lang) => (
+                            <option key={lang.code} value={lang.code}>{lang.name}</option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className="action-link-btn"
+                          onClick={() => handleTranslateTranscript(transcriptLanguage)}
+                          disabled={translatingTranscript || loading || transcriptLanguage === 'auto'}
+                          style={{ background: 'none', border: 'none', color: translatingTranscript ? 'var(--text-muted)' : 'var(--primary)', cursor: (translatingTranscript || transcriptLanguage === 'auto') ? 'not-allowed' : 'pointer', fontWeight: 600, fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                        >
+                          {translatingTranscript && (
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" style={{ animation: 'spin 1s linear infinite' }}>
+                              <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
+                            </svg>
+                          )}
+                          {translatingTranscript ? t.results.translating : t.results.translateTranscript}
+                        </button>
+                      </div>
                     </>
                   )}
                 </div>
@@ -4620,6 +5157,65 @@ Transcript:
                 disabled={isClearingGlobalTemp}
               >
                 {isClearingGlobalTemp ? t.studio.purgingBtn : t.studio.purgeBtn}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* LIVE recording confirmation modal */}
+      {liveWarningOpen && (
+        <div className="custom-confirm-modal-overlay">
+          <div className="custom-confirm-modal-card">
+            <div className="confirm-modal-icon-wrap">🔴</div>
+            <h3 className="confirm-modal-title">{t.form.liveWarningTitle}</h3>
+            <p className="confirm-modal-desc" style={{ marginBottom: '1rem' }}>
+              {t.form.liveWarningBody}
+            </p>
+            {liveProbe?.title && (
+              <div style={{
+                width: '100%', display: 'flex', flexDirection: 'column', gap: '0.35rem',
+                margin: '0 0 1.25rem 0', padding: '0.85rem 1rem', borderRadius: '10px',
+                background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.25)',
+                textAlign: 'left', fontSize: '0.8rem'
+              }}>
+                <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{liveProbe.title}</div>
+                {liveProbe.channel && (
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{liveProbe.channel}</div>
+                )}
+              </div>
+            )}
+            <label style={{
+              width: '100%', display: 'flex', alignItems: 'flex-start', gap: '0.5rem',
+              marginBottom: '1.25rem', fontSize: '0.78rem', color: 'var(--text-secondary)',
+              cursor: 'pointer', textAlign: 'left', lineHeight: 1.4
+            }}>
+              <input
+                type="checkbox"
+                checked={liveFromStart}
+                onChange={(e) => setLiveFromStart(e.target.checked)}
+                style={{ accentColor: '#ef4444', marginTop: '0.15rem' }}
+              />
+              <span>
+                <b>{t.form.liveFromStart}</b>
+                <br />
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.72rem' }}>{t.form.liveFromStartTip}</span>
+              </span>
+            </label>
+            <div className="confirm-modal-actions">
+              <button
+                type="button"
+                className="btn-confirm-cancel"
+                onClick={() => setLiveWarningOpen(false)}
+              >
+                {t.form.liveWarningCancel}
+              </button>
+              <button
+                type="button"
+                className="btn-confirm-purge"
+                onClick={beginLiveRecording}
+                style={{ background: 'linear-gradient(135deg,#ef4444,#b91c1c)', borderColor: 'rgba(239,68,68,0.6)' }}
+              >
+                {t.form.liveWarningStart}
               </button>
             </div>
           </div>

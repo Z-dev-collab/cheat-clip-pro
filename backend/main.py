@@ -11,8 +11,10 @@ from backend.routers import (
     analyze_router,
     cookies_router,
     downloads_router,
+    live_router,
     media_router,
     render_router,
+    schedule_router,
     system_router,
 )
 # Re-exports for backwards compatibility
@@ -88,10 +90,22 @@ async def add_security_headers(request: Request, call_next):
 # Include Modular Routers
 app.include_router(analyze_router)
 app.include_router(render_router)
+app.include_router(schedule_router)
 app.include_router(media_router)
 app.include_router(cookies_router)
 app.include_router(downloads_router)
 app.include_router(system_router)
+app.include_router(live_router)
+
+
+@app.on_event("shutdown")
+def _shutdown_live_recordings():
+    """Make sure no yt-dlp recording is left running when the backend exits."""
+    try:
+        from backend.services.live_service import stop_all_recordings
+        stop_all_recordings()
+    except Exception:
+        pass
 
 logger.info("Cheat Clip PRO backend routers mounted successfully.")
 

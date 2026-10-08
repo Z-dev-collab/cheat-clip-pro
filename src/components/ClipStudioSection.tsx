@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useLanguage } from '../locales';
 import { resilientFetch } from '../utils/api';
+import SchedulePanel from './SchedulePanel';
 import type {
   ViralClip,
   RenderSettings,
@@ -4654,6 +4655,12 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Upload Schedule / Jam Tayang planner (full width) */}
+      <SchedulePanel
+        clipCount={selectedClips.length || allClips.length}
+        clipTitles={selectedClips.map((c) => c.title)}
+      />
 
       {/* Bottom Sticky Action Footer */}
       <div className="studio-bottom-action-bar">

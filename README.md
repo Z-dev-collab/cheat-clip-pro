@@ -1,177 +1,260 @@
 # 🎬 Cheat Clip PRO
 
-> **AI Powered Auto Clipper — Turn long YouTube, Google Drive, and uploaded videos into viral TikToks, Shorts, and Reels with animated subtitles, face centering, and music in minutes.**
+> **AI Powered Auto Clipper** — Ubah video YouTube panjang, siaran langsung, Google Drive, atau video dari situs mana pun menjadi TikTok / Shorts / Reels viral dengan subtitle animasi, face centering, dan musik — dalam hitungan menit.
+
+Proyek ini adalah replika **Cheat Clip PRO** dengan beberapa tambahan penting:
+
+| Fitur tambahan | Keterangan |
+|---|---|
+| 🔴 **Clip Siaran Langsung (LIVE)** | Rekam & potong live streaming YouTube langsung dari aplikasi. |
+| 🎬 **Clip film dari situs mana pun** | Dukung lk21 / idlix / link `.mp4` / stream `.m3u8` (per part). |
+| 🌐 **Terjemahan transkrip & judul (119 bahasa)** | Ubah bahasa transkrip + judul output, tanpa API key tambahan. |
+| 🔌 **Provider AI fleksibel** | Gemini **atau** server OpenAI-compatible (9router, OpenRouter, LM Studio, Ollama, vLLM). |
+| ⏰ **Penjadwal Jam Tayang (BARU)** | Hitung **berapa kali upload per jam/hari** yang aman + buat jadwal tayang konkret. |
+| 🛠️ **Render anti-gagal** | Fallback unduh video penuh + potong lokal (mengatasi error *moov atom* / 403). |
 
 ---
 
-## ⚡ Quick Start & Setup
+## 🚀 Cara Install & Menjalankan (Paling Cepat)
 
-Follow these steps to set up and run Cheat Clip PRO locally on **Windows**, **macOS**, or **Linux**.
+### ⚡ Cara 1 — Windows, sekali klik (paling mudah)
 
-### Step 1: Prerequisites
+1. Pastikan **Node.js**, **Python**, **ffmpeg**, dan **yt-dlp** sudah terpasang (lihat [Prasyarat](#-prasyarat) di bawah — hanya sekali).
+2. Klik dua kali file **`Jalankan Cheat Clip PRO.bat`** di folder proyek (atau ikon **“Cheat Clip PRO”** di Desktop).
+3. Skrip otomatis:
+   * menyiapkan PATH `ffmpeg` / `yt-dlp`,
+   * menjalankan **backend** + **frontend**,
+   * membuka browser ke aplikasi.
+4. Selesai — aplikasi terbuka di **http://localhost:5173/**. ✅
 
-Make sure you have the following installed:
+> Kalau muncul jendela hitam (terminal), **biarkan tetap terbuka** selama memakai aplikasi.
 
-1. **[Git](https://git-scm.com/)**
-   * **Windows:** `winget install Git.Git` or download from [git-scm.com](https://git-scm.com/)
-   * **macOS:** `brew install git`
-   * **Linux:** `sudo apt install git`
-2. **[Node.js](https://nodejs.org/)** (v18 or newer)
-   * Download from [nodejs.org](https://nodejs.org/) or install via your package manager.
-3. **[Python](https://www.python.org/)** (v3.10 or newer)
-   * **Windows:** Install from [python.org](https://www.python.org/downloads/) (make sure to check *"Add Python to PATH"* during setup) or from Microsoft Store.
-   * **macOS:** `brew install python`
-   * **Linux:** `sudo apt install python3 python3-pip python3-venv`
-4. **FFmpeg & yt-dlp** (Required to download, slice, and render clips)
-   * **Windows (PowerShell):**
-     ```powershell
-     winget install Gyan.FFmpeg
-     winget install yt-dlp.yt-dlp
-     ```
-     *(Close and reopen your terminal after installing so Windows recognizes them)*
-   * **macOS (Terminal):**
-     ```bash
-     brew install ffmpeg-full yt-dlp
-     ```
-      `ffmpeg-full` is required for the libass subtitle filter used by rendered captions.
-   * **Linux:**
-     ```bash
-     sudo apt update && sudo apt install ffmpeg
-     pip install yt-dlp
-     ```
-
----
-
-### Step 2: Clone the Repository
-
-Open your terminal and clone the repository:
+### 🧑‍💻 Cara 2 — Manual (semua OS)
 
 ```bash
-git clone https://github.com/galihjuansaputra/cheat-clip-pro.git
+# 1) Ambil kode
+git clone <URL-REPO-ANDA> cheat-clip-pro
 cd cheat-clip-pro
-```
 
----
-
-### Step 3: Install Dependencies
-
-#### 1. Frontend Dependencies
-```bash
+# 2) Dependensi frontend
 npm install
-```
 
-#### 2. Backend Dependencies
-We recommend setting up a Python virtual environment:
+# 3) Dependensi backend (disarankan pakai virtualenv)
+python -m venv venv
+# Windows:
+venv\Scripts\activate
+# macOS / Linux:
+source venv/bin/activate
+pip install -r backend/requirements.txt
 
-* **Windows:**
-  ```powershell
-  python -m venv venv
-  venv\Scripts\activate
-  pip install -r backend/requirements.txt
-  ```
-
-* **macOS / Linux:**
-  ```bash
-  python3 -m venv venv
-  source venv/bin/activate
-  pip install -r backend/requirements.txt
-  ```
-
----
-
-### Step 4: Run the App
-
-Launch both the frontend and backend servers concurrently:
-
-```bash
+# 4) Jalankan (backend + frontend sekaligus)
 npm run dev
 ```
 
-* **Web App:** [`http://localhost:5173`](http://localhost:5173)
-* **Backend API:** [`http://localhost:8000`](http://localhost:8000)
-* **API Documentation:** [`http://localhost:8000/docs`](http://localhost:8000/docs)
+Lalu buka **http://localhost:5173/**.
+
+| Alamat | Fungsi |
+|---|---|
+| **http://localhost:5173** | 🌐 Aplikasi web (buka ini) |
+| http://localhost:8000 | ⚙️ Backend API |
+| http://localhost:8000/docs | 📘 Dokumentasi API (Swagger) |
+
+> Jika port **5173** sudah terpakai, Vite otomatis memakai port lain — lihat URL yang tertulis di terminal.
 
 ---
 
-## 🔄 Updating to the Latest Version
+## 📋 Prasyarat
 
-To update Cheat Clip PRO to the latest release:
+| Perangkat | Versi | Catatan |
+|---|---|---|
+| **Node.js** | v18+ (disarankan v20+) | [nodejs.org](https://nodejs.org/) |
+| **Python** | 3.10+ (disarankan 3.11–3.13) | Centang **“Add Python to PATH”** saat install |
+| **ffmpeg** | terbaru | Untuk potong & render video |
+| **yt-dlp** | terbaru | Untuk mengunduh video/live |
+
+**Windows (PowerShell):**
+```powershell
+winget install Git.Git
+winget install OpenJS.NodeJS.LTS
+winget install Python.Python.3.12
+winget install Gyan.FFmpeg
+winget install yt-dlp.yt-dlp
+```
+*(Tutup & buka ulang terminal setelah install agar PATH dikenali.)*
+
+**macOS:**
+```bash
+brew install git node python ffmpeg-full yt-dlp
+```
+*(`ffmpeg-full` wajib untuk filter subtitle `libass`.)*
+
+**Linux (Debian/Ubuntu):**
+```bash
+sudo apt update && sudo apt install -y git nodejs npm python3 python3-pip python3-venv ffmpeg
+pip install yt-dlp
+```
+
+---
+
+## 🎯 Cara Pakai Singkat
+
+1. **Tempel URL** video (YouTube / Drive / live / situs film / `.mp4` / `.m3u8`) di kolom atas.
+2. **Pilih durasi** — `~15s` (hook cepat), `~30s` (standar), `~60s` (cerita).
+3. Klik **“Analisis Video”** → AI mencari momen paling menarik.
+4. **Atur di Clip Studio** — rasio 9:16, face tracking, gaya subtitle, watermark, musik, akselerasi hardware.
+5. **Batch Render** → unduh semua hasil sekaligus dalam satu **.ZIP**.
+
+---
+
+## ⏰ Fitur Baru: Penjadwal Jam Tayang
+
+Menjawab pertanyaan *“berapa kali upload per jam yang pas?”* — panel **⏰ Jadwal Jam Tayang** (di bagian bawah **Clip Studio**) menghitung jadwal tayang otomatis dengan **aturan anti-shadowban**:
+
+* **Maksimal 1 upload per jam** (aturan keras).
+* **Jarak ideal antar-upload 2–4 jam**.
+* **Hindari upload borongan** (penyebab utama shadowban).
+* Batas aman & maksimum **per hari, per platform**.
+
+**Cara pakai:**
+1. Analisis klip seperti biasa.
+2. Buka panel **⏰ Jadwal Jam Tayang**.
+3. Pilih **platform** (YouTube Panjang / Shorts / TikTok / Multi / Umum), **berapa klip per hari**, dan **tanggal mulai**.
+4. Klik **📅 Buat Jadwal** → muncul rekomendasi **berapa per jam**, **berapa per hari**, jam terbaik, total hari, dan tabel jadwal tiap klip.
+5. Klik **📋 Salin** atau **⬇️ CSV** untuk mengekspor jadwal.
+
+> **Catatan:** fitur ini membuat **jadwal + rekomendasi frekuensi** (planner offline, tanpa kredensial). Ini **tidak meng-upload otomatis** ke YouTube/TikTok — upload otomatis butuh login OAuth akun Anda.
+
+**Endpoint API terkait:**
+* `GET /api/schedule/platforms` — daftar platform + batas per hari
+* `GET /api/schedule/recommend` — rekomendasi frekuensi saja
+* `POST /api/schedule/plan` — jadwal lengkap (tanggal + jam per klip)
+
+---
+
+## 🔴 Cara Meng-clip Siaran Langsung (LIVE)
+
+1. Tempel link YouTube live, mis. `https://www.youtube.com/watch?v=iipR5yUp36o`.
+2. Aplikasi otomatis menampilkan badge **🔴 SIARAN LANGSUNG** (atau **⏳ PREMIERE**).
+3. Klik **“Rekam Live”** → konfirmasi → rekaman berjalan (menampilkan durasi, ukuran, kecepatan).
+   * Centang **“Rekam dari awal”** bila ingin merekam dari awal siaran.
+4. Klik **“Stop & Pakai”** saat selesai → hasil jadi video lokal biasa.
+5. Semua fitur Cheat Clip PRO berlaku penuh untuk hasil rekaman.
+
+> Merekam live memerlukan `yt-dlp` + `ffmpeg` (sudah disertakan/diatur otomatis). Tombol **Analisis** pada link live akan diarahkan ke proses rekam terlebih dahulu.
+
+---
+
+## 🎬 Cara Meng-clip Film dari Situs Mana Pun (per part)
+
+1. Tempel link halaman video dari **situs film apa pun** (lk21, idlix, dll.), link langsung `.mp4`, atau stream HLS `.m3u8`.
+2. Aplikasi otomatis mengenali sumber non-YouTube/Drive dan mengunduh lewat `yt-dlp` (dengan cookies browser bila ada).
+   * Progres unduhan ditampilkan real-time (**Mengunduh dari &lt;situs&gt;**).
+3. Video **di-cache** — analisis link sama lagi jadi instan.
+4. Di **Riwayat**, sumber ini diberi label **🎬 Film / Site**.
+
+> Cocok untuk membuat **clip per part** dari serial/film.
+
+---
+
+## 🔌 Memakai 9router / Provider OpenAI-compatible
+
+Kunci AI **tidak wajib dari Gemini**. Aplikasi mendukung **provider OpenAI-compatible** apa pun.
+
+1. Buka **Pengaturan AI**.
+2. Pilih **Provider**: `Gemini` atau `OpenAI-compatible (9router / OpenRouter / LM Studio / Ollama / vLLM)`.
+3. Isi **Base URL** (default `http://localhost:20128/v1`) dan **API Key** (boleh kosong untuk server lokal).
+4. Klik **Muat Model** untuk mengambil daftar model dari server.
+
+> Pengaturan provider & Base URL disimpan otomatis di browser (localStorage).
+
+---
+
+## 🌐 Ubah Bahasa Transkrip & Judul (119 Bahasa)
+
+* Pilih bahasa pada panel **Bahasa Output** (transkrip & judul terpisah).
+* `auto`/kosong = tanpa terjemahan (bahasa asli).
+* Timestamp transkrip tetap **1:1** dengan video.
+* Daftar bahasa: `GET /api/languages` (119 bahasa).
+
+---
+
+## ❓ Masalah Umum & Solusinya
+
+### 1. “Failed to render video” / `The system cannot find the file specified`
+**Penyebab:** `ffmpeg` atau `yt-dlp` belum terpasang.
+**Solusi:**
+```powershell
+winget install Gyan.FFmpeg
+winget install yt-dlp.yt-dlp
+```
+*(lalu tutup & buka ulang terminal)* — atau `pip install yt-dlp`.
+
+### 2. `No such filter: 'subtitles'`
+**Penyebab:** FFmpeg tanpa filter `libass`.
+**Solusi (macOS):** `brew install ffmpeg-full` lalu restart backend. Aplikasi otomatis memilih binary `ffmpeg-full` yang mendukung subtitle.
+
+### 3. “Sign in to confirm you're not a bot”
+**Penyebab:** YouTube memblokir unduhan tanpa login.
+**Solusi:** klik tombol 🍪 **Cookies**, ekspor cookies YouTube (ekstensi *Get cookies.txt locally*), tempel ke aplikasi.
+
+### 4. `moov atom not found` / unduhan klip gagal
+**Penyebab:** unduhan potongan YouTube korup.
+**Solusi:** sudah ditangani otomatis — aplikasi mengunduh **video penuh** lalu memotong **lokal** (fallback *Method 5*). Tidak perlu tindakan manual.
+
+### 5. Apakah jalan di GPU AMD / Intel / Mac?
+**Ya.** Otomatis mendukung **NVIDIA** (`h264_nvenc`), **AMD** (`h264_amf` di Radeon & Ryzen), **Intel** (`h264_qsv` di Arc & UHD), dan **CPU** (`libx264`). Bisa diganti di Render Settings / History.
+
+### 6. Port 5173 / 8000 sudah dipakai
+* Tutup instance lain yang berjalan, **atau** biarkan Vite memakai port alternatif (URL tertulis di terminal).
+* Backend default di port **8000** (lihat `scripts/start-backend.js`).
+
+---
+
+## 🔑 Google Gemini API Key Gratis (1 Menit)
+
+1. Buka **[Google AI Studio](https://aistudio.google.com/)** dan login dengan akun Google.
+2. Klik **“Get API key”** → **“Create API key”**.
+3. Salin key (diawali `AIzaSy...`).
+4. Tempel ke kolom **Gemini API Key** di aplikasi.
+
+> 💡 **Tips:** ketik `mock` di kolom API Key untuk menguji aplikasi dengan data contoh tanpa API key.
+
+---
+
+## 🔄 Update ke Versi Terbaru
 
 ```bash
 git pull
 npm install
 pip install -r backend/requirements.txt
 ```
-*(Make sure your virtual environment is activated if you created one)*
+*(Aktifkan virtualenv dulu bila memakainya.)*
 
 ---
 
-## 🔑 Free Google Gemini API Key (Takes 1 Minute)
+## 🗂️ Struktur Proyek Singkat
 
-Cheat Clip PRO uses Google's AI to find the best viral moments for free:
-1. Go to **[Google AI Studio](https://aistudio.google.com/)** and sign in with any Google account.
-2. Click **"Get API key"** (or **"Create API key"**).
-3. Copy your key (starts with `AIzaSy...`).
-4. Paste it into the **Gemini API Key** field in the app.
-
-> 💡 **Tip:** You can also type `mock` in the API Key box to test out the app with sample data without an API key!
-
----
-
-## 🎯 How to Use
-
-1. **Paste a YouTube URL** — Enter any podcast, stream, or video link.
-2. **Choose Duration** — Pick `~15s` (fast hooks), `~30s` (standard shorts), or `~60s` (story clips).
-3. **Click "Analyze Video"** — The AI finds the most exciting moments using YouTube audience retention data.
-4. **Customize in Clip Studio** — Adjust your video style:
-   * **Frame & Crop**: Fullscreen 9:16 vertical, square, or split-screen facecam.
-   * **Face Tracking**: Automatically keeps the speaker in the center of the frame.
-   * **Subtitles**: Choose viral animated karaoke caption styles and fonts.
-   * **Branding & Audio**: Add your watermark logo, background music, and hook sound effects.
-   * **Hardware Acceleration**: Choose your graphics card (NVIDIA, AMD, Intel) or CPU.
-5. **Batch Render & Download** — Click **Batch Render**, then download all your finished videos together in one **.ZIP** file!
+```
+cheat-clip-pro/
+├─ src/                     # Frontend (React + Vite + TypeScript)
+│  └─ components/
+│     ├─ ClipStudioSection.tsx   # Editor klip utama
+│     └─ SchedulePanel.tsx       # ⏰ Panel Jadwal Jam Tayang (BARU)
+├─ backend/                 # Backend (FastAPI + Python)
+│  ├─ main.py               # Entry point, daftar router
+│  ├─ video_engine.py       # Unduh/potong/render (ffmpeg + yt-dlp)
+│  ├─ routers/              # Endpoint API (analyze, render, live, schedule, …)
+│  ├─ services/
+│  │  └─ schedule_service.py     # Logika penjadwal jam tayang (BARU)
+│  └─ schemas/
+│     └─ schedule.py             # Skema request/response jadwal (BARU)
+├─ scripts/start-backend.js # Launcher backend
+├─ Jalankan Cheat Clip PRO.bat   # Launcher sekali klik (Windows)
+└─ package.json
+```
 
 ---
 
-## ❓ Common Problems & Easy Fixes
+## 📄 Lisensi
 
-### 1. "Failed to render video" or `The system cannot find the file specified`
-* **Cause:** `ffmpeg` or `yt-dlp` is missing on your computer.
-* **Fix:**
-  * **Windows (PowerShell):**
-    ```powershell
-    winget install Gyan.FFmpeg
-    winget install yt-dlp.yt-dlp
-    ```
-    *(Then close and reopen your terminal)*
-  * **Mac (Terminal):**
-    ```bash
-    brew install ffmpeg-full yt-dlp
-    ```
-  * Or install directly via Python: `pip install yt-dlp`
-
-### 2. `No such filter: 'subtitles'`
-* **Cause:** FFmpeg was installed without the libass subtitle filter.
-* **Fix (macOS):**
-  ```bash
-  brew install ffmpeg-full
-  ```
-  Restart the backend after installation. The app automatically prefers Homebrew's subtitle-capable `ffmpeg-full` binary.
-
-### 3. "Sign in to confirm you're not a bot"
-* **Cause:** YouTube blocks video downloads if too many requests are sent without logging in.
-* **Fix:** Click the 🍪 **Cookies** button in the top navigation bar, export your YouTube cookies using a free browser extension (like *Get cookies.txt locally*), and paste them into the app.
-
-### 4. Does this work on AMD graphics cards and Mac?
-* **Yes!** Cheat Clip PRO automatically supports:
-  * **NVIDIA** (`h264_nvenc`)
-  * **AMD** (`h264_amf` on Radeon GPUs & Ryzen CPUs)
-  * **Intel** (`h264_qsv` on Arc & UHD Graphics)
-  * **Apple Mac & CPU Software** (`libx264` universal high-speed fallback)
-* You can switch your preferred hardware acceleration encoder anytime in the Render Settings or History card.
-
----
-
-## 📄 License
-
-Distributed under the **MIT License**. Free for personal and commercial use!
+**MIT License** — bebas untuk penggunaan pribadi & komersial.
