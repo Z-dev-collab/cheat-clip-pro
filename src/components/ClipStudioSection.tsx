@@ -206,6 +206,7 @@ export interface StudioPreferences {
   fileNameSuffix?: string;
   titlePrefix?: string;
   titleSuffix?: string;
+  coverEnabled?: boolean;
 }
 
 export const DEFAULT_STUDIO_PREFS: Required<StudioPreferences> = {
@@ -239,6 +240,7 @@ export const DEFAULT_STUDIO_PREFS: Required<StudioPreferences> = {
   fileNameSuffix: '',
   titlePrefix: '',
   titleSuffix: '',
+  coverEnabled: false,
 };
 
 function getSavedStudioPreferences(): Partial<StudioPreferences> {
@@ -296,6 +298,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
   // Multi-Segment Merged Render Mode
   const [renderMode, setRenderMode] = useState<'separate' | 'merged'>(() => getSavedStudioPreferences().renderMode ?? DEFAULT_STUDIO_PREFS.renderMode);
+  const [coverEnabled, setCoverEnabled] = useState<boolean>(() => getSavedStudioPreferences().coverEnabled ?? DEFAULT_STUDIO_PREFS.coverEnabled);
   const [compilationTitle, setCompilationTitle] = useState<string>('');
 
   // Custom Font Library State
@@ -1412,6 +1415,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       fileNameSuffix,
       titlePrefix,
       titleSuffix,
+      coverEnabled,
     };
     try {
       localStorage.setItem(STUDIO_PREFS_KEY, JSON.stringify(prefs));
@@ -1449,6 +1453,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     fileNameSuffix,
     titlePrefix,
     titleSuffix,
+    coverEnabled,
   ]);
 
   const handleResetToDefaults = () => {
@@ -1483,6 +1488,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     setFileNameSuffix(DEFAULT_STUDIO_PREFS.fileNameSuffix);
     setTitlePrefix(DEFAULT_STUDIO_PREFS.titlePrefix);
     setTitleSuffix(DEFAULT_STUDIO_PREFS.titleSuffix);
+    setCoverEnabled(DEFAULT_STUDIO_PREFS.coverEnabled);
     handleResetTitlePosition();
     handleResetSubtitlePosition();
     try {
@@ -1561,6 +1567,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       // Multi-Segment Merged Highlight Video
       renderMode,
       compilationTitle: compilationTitle.trim() || undefined,
+      // Auto Cover / Thumbnail
+      coverEnabled,
     });
   };
 
@@ -3709,6 +3717,34 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             )}
           </div>
 
+          {/* 8b. Auto Cover / Thumbnail */}
+          <div className="studio-card-group" style={!coverEnabled ? { padding: '1rem 1.4rem' } : undefined}>
+            <div className="group-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: coverEnabled ? '0.85rem' : 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <span className="group-title" style={{ margin: 0 }}>{t.studio.coverTitle}</span>
+                <label style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer', margin: 0 }}>
+                  <input
+                    type="checkbox"
+                    checked={coverEnabled}
+                    onChange={e => setCoverEnabled(e.target.checked)}
+                    style={{ accentColor: 'var(--primary)', width: '15px', height: '15px', cursor: 'pointer', margin: 0 }}
+                  />
+                </label>
+                <span className={`status-pill ${coverEnabled ? 'pill-active' : ''}`} style={{ fontSize: '0.68rem', padding: '0.15rem 0.5rem', fontWeight: 500 }}>
+                  {coverEnabled ? t.studio.coverBadgeEnabled : t.studio.coverBadgeDisabled}
+                </span>
+              </div>
+            </div>
+
+            {coverEnabled && (
+              <div className="group-content" style={{ marginTop: '0.6rem' }}>
+                <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.5, fontWeight: 400 }}>
+                  {t.studio.coverHint}
+                </p>
+              </div>
+            )}
+          </div>
+
           {/* 9. Selected Clips Checklist */}
           <div className="studio-card-group">
             <div className="group-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '0.5rem' }}>
@@ -4335,11 +4371,25 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                       const dlUrlWithTitle = c.download_url
                         ? `${c.download_url}${c.download_url.includes('?') ? '&' : '?'}title=${encodeURIComponent(finalClipName)}`
                         : '';
+                      const coverUrlWithTitle = c.cover_url
+                        ? `${c.cover_url}${c.cover_url.includes('?') ? '&' : '?'}title=${encodeURIComponent(finalClipName + ' - cover')}`
+                        : '';
 
                       return (
                         <div key={i} className="recent-file-row">
                           <span className="file-idx">#{i + 1}</span>
                           <span className="file-name" title={c.title}>{c.title}</span>
+                          {c.cover_url && (
+                            <a
+                              href={coverUrlWithTitle}
+                              download={`${finalClipName} - cover.jpg`}
+                              className="quick-dl-btn"
+                              style={{ background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)' }}
+                              title={t.studio.coverDownloadTooltip || 'Download cover image (JPG)'}
+                            >
+                              {t.studio.coverDownloadBtn || '⬇️ Cover'}
+                            </a>
+                          )}
                           {c.download_url && (
                             <a
                               href={dlUrlWithTitle}

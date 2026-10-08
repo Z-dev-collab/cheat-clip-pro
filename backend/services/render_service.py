@@ -11,6 +11,7 @@ from backend.config import (
     TEMP_DIR,
     download_clip_segment,
     generate_ass_file,
+    generate_clip_cover,
     has_emoji,
     is_valid_mp4,
     logger,
@@ -215,6 +216,31 @@ async def render_single_batch_clip(
         clip_status["progress_percent"] = 100
         clip_status["download_url"] = f"/api/download-rendered/{out_filename}"
         clip_status["output_path"] = out_path
+
+        # 4. Auto Cover / Thumbnail (optional)
+        if settings.cover_enabled:
+            try:
+                cover_filename = f"cover_{idx+1}_{batch_id}.jpg"
+                cover_path = str(EXPORTS_DIR / "covers" / cover_filename)
+                cover_title = (clip_status.get("base_title") or display_title or base_title or "").strip()
+                cover_out = await asyncio.to_thread(
+                    generate_clip_cover,
+                    out_path,
+                    cover_path,
+                    cover_title,
+                    settings.title_font or settings.caption_font or "Outfit",
+                    settings.title_text_case or settings.text_case or "uppercase",
+                    settings.title_font_size_px or settings.font_size_px,
+                    settings.aspect_ratio or "9:16",
+                    None,
+                    duration_sec,
+                )
+                if cover_out and os.path.exists(cover_out):
+                    clip_status["cover_filename"] = cover_filename
+                    clip_status["cover_url"] = f"/api/download-cover/{cover_filename}"
+                    clip_status["cover_path"] = cover_out
+            except Exception as ce:
+                logger.warning(f"Cover generation skipped for clip {idx}: {ce}")
 
     except Exception as e:
         logger.error(f"Error rendering clip {idx} in batch {batch_id}: {e}")
@@ -504,6 +530,31 @@ async def render_merged_batch_clips(
         clip_status["progress_percent"] = 100
         clip_status["download_url"] = f"/api/download-rendered/{out_filename}"
         clip_status["output_path"] = out_path
+
+        # 5. Auto Cover / Thumbnail (optional)
+        if settings.cover_enabled:
+            try:
+                cover_filename = f"cover_merged_{batch_id}.jpg"
+                cover_path = str(EXPORTS_DIR / "covers" / cover_filename)
+                cover_title = (settings.compilation_title or clip_status.get("base_title") or display_title or "Highlight").strip()
+                cover_out = await asyncio.to_thread(
+                    generate_clip_cover,
+                    out_path,
+                    cover_path,
+                    cover_title,
+                    settings.title_font or settings.caption_font or "Outfit",
+                    settings.title_text_case or settings.text_case or "uppercase",
+                    settings.title_font_size_px or settings.font_size_px,
+                    settings.aspect_ratio or "9:16",
+                    None,
+                    total_duration_sec,
+                )
+                if cover_out and os.path.exists(cover_out):
+                    clip_status["cover_filename"] = cover_filename
+                    clip_status["cover_url"] = f"/api/download-cover/{cover_filename}"
+                    clip_status["cover_path"] = cover_out
+            except Exception as ce:
+                logger.warning(f"Cover generation skipped for merged batch {batch_id}: {ce}")
 
     except Exception as e:
         logger.error(f"Error rendering merged batch {batch_id}: {e}")

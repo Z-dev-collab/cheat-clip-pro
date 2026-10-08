@@ -988,8 +988,22 @@ async def analyze_video(request: AnalyzeRequest):
 
         transcript_text = "\n".join(transcript_dump)
 
+        # ── TikTok source override: clips must be 30s–60s (user requirement) ──
+        _netloc = (urlparse(req_clean).netloc or "").lower()
+        is_tiktok_source = _netloc.endswith("tiktok.com") or ".tiktok.com" in _netloc
+
         is_auto_duration = str(request.duration).lower() == "auto"
-        if is_auto_duration:
+        if is_tiktok_source:
+            dur_range = "30-60s"
+            duration_instruction = (
+                "TikTok CLIP DURATION RULE (STRICT — HIGHEST PRIORITY, OVERRIDES ALL OTHER DURATION SETTINGS):\n"
+                "- This video comes from TikTok, so EVERY clip MUST be between 30 seconds and 60 seconds (1 minute).\n"
+                "- Absolute minimum: 30 seconds. Absolute maximum: 60 seconds. NEVER produce a clip shorter than 30s or longer than 60s.\n"
+                "- Prefer moments long enough to naturally fill the 30–60s window (a complete story, exchange, or explanation).\n"
+                "- Always begin and end at complete sentence boundaries; never cut mid-sentence or mid-thought.\n"
+                "- Double-check each clip's (end - start) is >= 30 and <= 60 before returning it."
+            )
+        elif is_auto_duration:
             dur_range = "Auto dynamic length (~15s to ~90s max)"
             duration_instruction = (
                 "DYNAMIC AUTO CLIP DURATION GUIDELINES:\n"
@@ -1411,7 +1425,9 @@ async def analyze_video(request: AnalyzeRequest):
             
             fallback_clips_list = []
             for i, st in enumerate(candidate_starts):
-                if request.duration == "15s":
+                if is_tiktok_source:
+                    target_len = 45.0
+                elif request.duration == "15s":
                     target_len = 15.0
                 elif request.duration == "60s":
                     target_len = 60.0
@@ -1499,7 +1515,39 @@ async def analyze_video(request: AnalyzeRequest):
                     if start + 15.0 <= l_end <= max_end:
                         best_end = l_end
                 end = best_end
-            
+
+            # ── TikTok source: HARD-enforce 30s–60s clip window ──────────────
+            if is_tiktok_source:
+                # 1) Trim clips longer than 60s back to the nearest sentence end <= 60s (but >= 30s)
+                if (end - start) > 60.0:
+                    max_end = start + 60.0
+                    best_end = max_end
+                    for l in enriched_transcript:
+                        l_end = l.get('end', 0.0)
+                        if start + 30.0 <= l_end <= max_end:
+                            best_end = l_end
+                    end = best_end
+                # 2) Extend clips shorter than 30s forward to the next sentence end reaching >= 30s
+                if (end - start) < 30.0:
+                    min_end = start + 30.0
+                    best_end = min_end
+                    for l in enriched_transcript:
+                        l_end = l.get('end', 0.0)
+                        if min_end <= l_end <= start + 60.0:
+                            best_end = l_end
+                            break
+                    end = best_end
+                # 3) Clamp to video bounds, then re-widen from the end if needed
+                if end > duration:
+                    end = duration
+                if (end - start) < 30.0 and (end - 30.0) >= 0.0:
+                    start = end - 30.0
+                # 4) Final safety clamp so the window never exceeds 60s
+                if (end - start) > 60.0:
+                    end = start + 60.0
+                if start < 0.0:
+                    start = 0.0
+
             clip_lines = [
                 line.get("text", "")
                 for line in enriched_transcript

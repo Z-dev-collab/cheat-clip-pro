@@ -149,6 +149,8 @@ export interface RenderSettings {
   // Multi-Segment Merged Highlight Video
   renderMode?: 'separate' | 'merged';
   compilationTitle?: string;
+  // Auto Cover / Thumbnail
+  coverEnabled?: boolean;
 }
 
 export interface RenderClipStatus {
@@ -158,6 +160,8 @@ export interface RenderClipStatus {
   status: 'pending' | 'downloading' | 'transcribing' | 'tracking' | 'rendering' | 'completed' | 'error';
   progress_percent: number;
   download_url?: string;
+  cover_url?: string;
+  cover_filename?: string;
   error_message?: string;
   error?: string;
 }

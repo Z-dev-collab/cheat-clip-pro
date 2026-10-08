@@ -52,6 +52,8 @@ class RenderSettingsModel(BaseModel):
     # Multi-Segment Merged Highlight Video
     render_mode: Optional[str] = "separate"  # "separate" | "merged"
     compilation_title: Optional[str] = None
+    # Auto Cover / Thumbnail
+    cover_enabled: Optional[bool] = False
 
 class RenderBatchRequest(BaseModel):
     video_url: str

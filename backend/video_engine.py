@@ -772,13 +772,42 @@ def download_clip_segment(
 
     if local_source and local_source.exists():
         logger.info(f"Slicing local/gdrive video: {local_source} [{start_time:.2f}s -> {end_time:.2f}s] to {output_path}")
+        # FAST PATH: stream copy (no re-encode). This is ~60x faster than the
+        # old libx264 re-encode (e.g. ~1.5s vs ~93s for a 60s 1080p60 clip) and
+        # is lossless. The final render re-encodes with all filters anyway, so a
+        # container-level cut costs nothing. Cut points snap to keyframes.
+        fast_timeout = max(60, min(300, int(clip_duration) + 60))
+        copy_cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-ss", str(start_time),
+            "-to", str(end_time),
+            "-i", str(local_source),
+            "-c", "copy",
+            "-avoid_negative_ts", "make_zero",
+            "-movflags", "+faststart",
+            str(output_path)
+        ]
+        try:
+            subprocess.run(copy_cmd, capture_output=True, text=True, timeout=fast_timeout)
+        except subprocess.TimeoutExpired:
+            logger.warning("Fast stream-copy slice timed out; falling back to re-encode.")
+        if output_path.exists() and is_valid_mp4(output_path):
+            return str(output_path)
+        if output_path.exists():
+            try:
+                output_path.unlink()
+            except Exception:
+                pass
+
+        # FALLBACK: re-encode with the active hardware encoder (frame-accurate
+        # cut) only if the fast copy failed (e.g. incompatible container/codec).
         slice_timeout = max(300, min(1200, int(clip_duration * 6) + 90))
         slice_cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-ss", str(start_time),
             "-to", str(end_time),
             "-i", str(local_source),
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+            *ACTIVE_ENCODER_ARGS,
             "-c:a", "aac", "-b:a", "192k",
             "-avoid_negative_ts", "make_zero",
             "-movflags", "+faststart",
@@ -3270,3 +3299,193 @@ def extract_clip_frame(video_url: str, video_id: str, timestamp: float = 0.0) ->
         logger.warning(f"Thumbnail fallback failed for {video_id}: {e}")
 
     return None
+
+
+def _cover_canvas_size(aspect_ratio: str) -> Tuple[int, int]:
+    """Returns the (width, height) cover canvas for a given aspect ratio."""
+    if aspect_ratio == "16:9_landscape":
+        return (1920, 1080)
+    if aspect_ratio == "1:1":
+        return (1080, 1080)
+    if aspect_ratio in ("4:3", "16:9"):
+        return (1080, 1440)
+    return (1080, 1920)
+
+
+def generate_clip_cover(
+    video_path: str,
+    output_image_path: str,
+    title_text: str = "",
+    font_name: str = "Outfit",
+    text_case: str = "uppercase",
+    font_size_px: Optional[int] = None,
+    aspect_ratio: str = "9:16",
+    timestamp: Optional[float] = None,
+    duration: Optional[float] = None,
+) -> Optional[str]:
+    """
+    Builds a thumbnail/cover image (JPG) for a finished clip.
+
+    Steps:
+      1. Grab a representative frame from the rendered clip with FFmpeg.
+      2. Cover-fit that frame onto the target aspect-ratio canvas.
+      3. Darken the lower band and draw the clip title on top (bold, outlined).
+
+    Never raises: returns the saved cover path, or None if anything fails.
+    """
+    try:
+        if not video_path or not os.path.exists(video_path):
+            return None
+
+        canvas_w, canvas_h = _cover_canvas_size(aspect_ratio)
+
+        # Pick a representative timestamp (skip intros/black frames, prefer ~18% in).
+        if timestamp is not None and timestamp > 0:
+            target_ts = float(timestamp)
+        elif duration and duration > 0:
+            target_ts = min(max(duration * 0.18, 1.0), max(1.0, duration - 0.5))
+        else:
+            target_ts = 1.5
+
+        cover_dir = EXPORTS_DIR / "covers"
+        cover_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. Extract the raw frame to a temporary file.
+        tmp_frame = cover_dir / f"_tmpframe_{int(time.time() * 1000)}.png"
+        ff_cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-ss", f"{target_ts:.3f}",
+            "-i", str(video_path),
+            "-frames:v", "1",
+            "-strict", "-1",
+            str(tmp_frame),
+        ]
+        try:
+            subprocess.run(ff_cmd, capture_output=True, timeout=25)
+        except Exception as ex:
+            logger.warning(f"Cover frame extraction failed: {ex}")
+
+        if not tmp_frame.exists() or tmp_frame.stat().st_size < 500:
+            # Fallback: grab the very first frame.
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                     "-i", str(video_path), "-frames:v", "1", "-strict", "-1", str(tmp_frame)],
+                    capture_output=True, timeout=25,
+                )
+            except Exception:
+                pass
+
+        if not tmp_frame.exists() or tmp_frame.stat().st_size < 500:
+            return None
+
+        # 2. Cover-fit the frame onto the target canvas.
+        base = Image.open(tmp_frame).convert("RGB")
+        src_w, src_h = base.size
+        scale = max(canvas_w / float(src_w), canvas_h / float(src_h))
+        new_w, new_h = max(1, int(round(src_w * scale))), max(1, int(round(src_h * scale)))
+        _resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS", 1)
+        resized = base.resize((new_w, new_h), _resample)
+        left = max(0, (new_w - canvas_w) // 2)
+        top = max(0, (new_h - canvas_h) // 2)
+        canvas = resized.crop((left, top, left + canvas_w, top + canvas_h)).convert("RGBA")
+
+        try:
+            tmp_frame.unlink()
+        except Exception:
+            pass
+
+        # 3. Draw the title over a darkened lower band.
+        if title_text and title_text.strip():
+            overlay = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+            odraw = ImageDraw.Draw(overlay)
+
+            band_h = int(canvas_h * 0.42)
+            band_top = canvas_h - band_h
+            for y in range(band_h):
+                alpha = int(215 * (y / float(band_h)) ** 0.85)
+                odraw.line([(0, band_top + y), (canvas_w, band_top + y)], fill=(0, 0, 0, alpha))
+
+            canvas = Image.alpha_composite(canvas, overlay)
+            draw = ImageDraw.Draw(canvas)
+
+            formatted, line_count = wrap_title_smart(
+                apply_text_case(title_text.strip(), text_case or "uppercase"),
+                max_single_len=20,
+            )
+            lines = [l.strip() for l in formatted.split("\\N") if l.strip()] or [formatted]
+
+            if font_size_px and font_size_px > 0:
+                title_size = int(font_size_px * (canvas_w / 1080.0))
+            else:
+                title_size = int(canvas_w * 0.078)
+            if line_count >= 3:
+                title_size = int(title_size * 0.82)
+            title_size = max(30, title_size)
+
+            text_font = get_font(font_name or "Outfit", title_size)
+            emoji_font = get_emoji_font(int(title_size * 0.90))
+            stroke_width = max(3, int(title_size * 0.06))
+            line_step = int(title_size * 0.92)
+
+            # Measure to allow shrink-to-fit.
+            probe = ImageDraw.Draw(Image.new("RGBA", (canvas_w, canvas_h)))
+            max_allowed_w = canvas_w - int(canvas_w * 0.10)
+
+            def _measure(font, efont, ls):
+                w = 0
+                for line in ls:
+                    lw = 0
+                    for kind, chunk in split_text_and_emojis(line):
+                        f = efont if (kind == 'emoji' and efont) else font
+                        bbox = probe.textbbox((0, 0), chunk, font=f)
+                        lw += (bbox[2] - bbox[0])
+                    w = max(w, lw)
+                return w
+
+            if _measure(text_font, emoji_font, lines) > max_allowed_w:
+                for _ in range(12):
+                    title_size = int(title_size * 0.92)
+                    if title_size < 26:
+                        break
+                    text_font = get_font(font_name or "Outfit", title_size)
+                    emoji_font = get_emoji_font(int(title_size * 0.90))
+                    stroke_width = max(2, int(title_size * 0.06))
+                    line_step = int(title_size * 0.92)
+                    if _measure(text_font, emoji_font, lines) <= max_allowed_w:
+                        break
+
+            total_text_h = line_count * line_step
+            start_y = canvas_h - int(canvas_h * 0.06) - total_text_h
+
+            t_ref_bbox = draw.textbbox((0, 0), "HGY", font=text_font)
+            t_ref_mid = (t_ref_bbox[1] + t_ref_bbox[3]) / 2.0
+
+            for idx, line in enumerate(lines):
+                line_top = start_y + idx * line_step
+                segments = split_text_and_emojis(line)
+                widths = []
+                for kind, chunk in segments:
+                    f = emoji_font if (kind == 'emoji' and emoji_font) else text_font
+                    bbox = draw.textbbox((0, 0), chunk, font=f)
+                    widths.append(bbox[2] - bbox[0])
+                total_w = sum(widths)
+                cur_x = (canvas_w - total_w) / 2.0
+                for (kind, chunk), w in zip(segments, widths):
+                    if kind == 'emoji' and emoji_font:
+                        e_bbox = draw.textbbox((0, 0), chunk, font=emoji_font)
+                        e_mid = (e_bbox[1] + e_bbox[3]) / 2.0
+                        draw.text((cur_x, line_top + (t_ref_mid - e_mid)), chunk,
+                                  font=emoji_font, embedded_color=True)
+                    else:
+                        draw.text((cur_x, line_top), chunk, font=text_font,
+                                  fill=(255, 255, 255, 255),
+                                  stroke_width=stroke_width, stroke_fill=(0, 0, 0, 255))
+                    cur_x += w
+
+        os.makedirs(os.path.dirname(output_image_path), exist_ok=True)
+        canvas.convert("RGB").save(output_image_path, "JPEG", quality=92, optimize=True)
+        return output_image_path
+    except Exception as e:
+        logger.warning(f"Cover generation failed for {video_path}: {e}")
+        return None

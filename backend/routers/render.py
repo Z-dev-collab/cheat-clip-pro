@@ -199,6 +199,22 @@ def download_rendered_file(file_name: str, title: Optional[str] = None):
     return FileResponse(file_path, media_type="video/mp4", filename=dl_filename)
 
 
+@router.get("/api/download-cover/{file_name}")
+def download_cover_file(file_name: str, title: Optional[str] = None):
+    safe_name = os.path.basename(file_name)
+    file_path = EXPORTS_DIR / "covers" / safe_name
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Cover image not found")
+
+    dl_filename = safe_name
+    if title and title.strip():
+        clean_title = re.sub(r'[\\/*?:"<>|]', "", title.strip())
+        if clean_title:
+            dl_filename = f"{clean_title}.jpg" if not clean_title.lower().endswith(".jpg") else clean_title
+
+    return FileResponse(file_path, media_type="image/jpeg", filename=dl_filename)
+
+
 @router.get("/api/download-batch-zip/{batch_id}")
 def download_batch_zip(batch_id: str):
     clean_id = os.path.basename(batch_id)
