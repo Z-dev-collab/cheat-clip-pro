@@ -2655,6 +2655,19 @@ Transcript:
                 </button>
               </div>
 
+              {/* Supported sources hint — clarifies which links this tab accepts */}
+              <div style={{
+                fontSize: '0.72rem',
+                color: 'var(--text-muted)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                flexWrap: 'wrap'
+              }}>
+                <span style={{ opacity: 0.7 }}>ℹ️</span>
+                <span>{t.form.urlHelp}</span>
+              </div>
+
               {/* LIVE recording panel — the added streaming capability */}
               {(liveProbe || liveRecording || (liveJob && liveJob.status !== 'ready')) && (
                 <div style={{
