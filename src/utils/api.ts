@@ -153,3 +153,71 @@ export async function stopLiveRecord(jobId: string): Promise<LiveRecordStatus> {
   }
   return await res.json();
 }
+
+// --------------------------------------------------------------------------- //
+//  Live AUTO-CLIP: grab the latest N seconds from the live edge every interval
+// --------------------------------------------------------------------------- //
+
+export interface AutoClipItem {
+  index: number;
+  filename: string;
+  file_path: string;
+  video_url: string;
+  download_url: string;
+  size_bytes: number;
+  duration: number;
+  created_at: number;
+}
+
+export interface AutoClipStatus {
+  job_id: string;
+  status: 'starting' | 'capturing' | 'waiting' | 'completed' | 'stopped' | 'failed';
+  title?: string;
+  url?: string;
+  interval_minutes?: number;
+  interval_seconds?: number;
+  clip_seconds?: number;
+  clips: AutoClipItem[];
+  seconds_to_next?: number;
+  error?: string | null;
+  ended_reason?: string;
+}
+
+/** Starts an auto-clip job for a live broadcast. */
+export async function startLiveAutoClip(
+  url: string,
+  intervalMinutes: number = 60,
+  clipSeconds: number = 60,
+  title?: string
+): Promise<{ job_id: string; status: string; interval_minutes: number; clip_seconds: number }> {
+  const res = await fetch('/api/live/autoclip/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, interval_minutes: intervalMinutes, clip_seconds: clipSeconds, title }),
+  });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j.detail || `Failed to start auto-clip (HTTP ${res.status})`);
+  }
+  return await res.json();
+}
+
+/** Polls the status of a running auto-clip job. */
+export async function getLiveAutoClipStatus(jobId: string): Promise<AutoClipStatus> {
+  const res = await fetch(`/api/live/autoclip/status/${jobId}`);
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j.detail || `HTTP ${res.status}`);
+  }
+  return await res.json();
+}
+
+/** Stops a running auto-clip job. */
+export async function stopLiveAutoClip(jobId: string): Promise<{ job_id: string; status: string }> {
+  const res = await fetch(`/api/live/autoclip/stop/${jobId}`, { method: 'POST' });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j.detail || `HTTP ${res.status}`);
+  }
+  return await res.json();
+}

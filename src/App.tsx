@@ -6,8 +6,8 @@ import { CookiesModal } from './components/CookiesModal';
 import { ClipTrimmerModal } from './components/ClipTrimmerModal';
 import { AppUpdateModal } from './components/AppUpdateModal';
 import { ArchiveFilmPanel } from './components/ArchiveFilmPanel';
-import { resilientFetch, probeLive, startLiveRecord, getLiveRecordStatus, stopLiveRecord } from './utils/api';
-import type { LiveProbeResult, LiveRecordStatus } from './utils/api';
+import { resilientFetch, probeLive, startLiveRecord, getLiveRecordStatus, stopLiveRecord, startLiveAutoClip, getLiveAutoClipStatus, stopLiveAutoClip } from './utils/api';
+import type { LiveProbeResult, LiveRecordStatus, AutoClipStatus } from './utils/api';
 import { useLanguage } from './locales';
 import type { AnalyzeResponse, ViralClip, RenderSettings, BatchRenderProgress } from './types';
 
@@ -49,6 +49,18 @@ export default function App() {
   const livePollRef = useRef<number | null>(null);
   const liveDebounceRef = useRef<number | null>(null);
   const liveProbeSeqRef = useRef<number>(0);
+  // ---- Live AUTO-CLIP state: capture the latest N seconds every interval ----
+  const [autoClipJob, setAutoClipJob] = useState<AutoClipStatus | null>(null);
+  const [autoClipRunning, setAutoClipRunning] = useState(false);
+  const [autoClipInterval, setAutoClipInterval] = useState<number>(() => {
+    const saved = parseInt(localStorage.getItem('cheat_clip_autoclip_interval') || '', 10);
+    return Number.isFinite(saved) && saved >= 1 ? saved : 60;
+  });
+  const [autoClipSeconds, setAutoClipSeconds] = useState<number>(() => {
+    const saved = parseInt(localStorage.getItem('cheat_clip_autoclip_seconds') || '', 10);
+    return Number.isFinite(saved) && saved >= 5 ? saved : 60;
+  });
+  const autoClipPollRef = useRef<number | null>(null);
   const [durationPref, setDurationPref] = useState<'15s' | '30s' | '60s' | 'auto'>(() => {
     const saved = localStorage.getItem('cheat_clip_duration_pref');
     if (saved === '15s' || saved === '30s' || saved === '60s' || saved === 'auto') return saved;
@@ -58,6 +70,10 @@ export default function App() {
     const saved = localStorage.getItem('cheat_clip_ai_provider');
     return saved === 'openai' ? 'openai' : 'gemini';
   });
+  // TikTok sources are forced to 30s–60s clips (min 30s, max 1 minute).
+  const isTiktokUrl = /(?:^|\.)tiktok\.com/i.test(
+    (() => { try { return new URL(url.trim()).hostname; } catch { return ''; } })()
+  );
   // Gemini and 9router/OpenAI API keys live in SEPARATE storage slots, so switching
   // providers never overwrites the other one's key.
   const [apiKey, setApiKey] = useState(() => {
@@ -368,6 +384,73 @@ export default function App() {
     };
   }, [stopLivePolling]);
 
+  // ---- Live AUTO-CLIP: start / poll / stop ----
+  const stopAutoClipPolling = useCallback(() => {
+    if (autoClipPollRef.current !== null) {
+      window.clearInterval(autoClipPollRef.current);
+      autoClipPollRef.current = null;
+    }
+  }, []);
+
+  const beginAutoClip = useCallback(async () => {
+    const u = url.trim();
+    if (!u) {
+      setError(t.form.autoClipNeedUrl);
+      return;
+    }
+    setError(null);
+    try {
+      const started = await startLiveAutoClip(u, autoClipInterval, autoClipSeconds, liveProbe?.title);
+      setAutoClipRunning(true);
+      const poll = window.setInterval(async () => {
+        try {
+          const st = await getLiveAutoClipStatus(started.job_id);
+          setAutoClipJob(st);
+          if (st.status === 'completed' || st.status === 'failed' || st.status === 'stopped') {
+            stopAutoClipPolling();
+            setAutoClipRunning(false);
+            if (st.status === 'completed') {
+              setToastMessage(t.form.autoClipEnded);
+              setTimeout(() => setToastMessage(null), 5000);
+            } else if (st.status === 'failed') {
+              setToastMessage(`${t.form.autoClipFailed} ${st.error || ''}`.trim());
+              setTimeout(() => setToastMessage(null), 5000);
+            }
+          }
+        } catch (e) {
+          // transient poll error: keep trying
+        }
+      }, 2000);
+      autoClipPollRef.current = poll;
+      setToastMessage(t.form.autoClipStarted);
+      setTimeout(() => setToastMessage(null), 4000);
+    } catch (e: any) {
+      setError(e?.message || t.form.autoClipFailed);
+    }
+  }, [url, autoClipInterval, autoClipSeconds, liveProbe, stopAutoClipPolling, t]);
+
+  const haltAutoClip = useCallback(async () => {
+    if (!autoClipJob?.job_id) {
+      stopAutoClipPolling();
+      setAutoClipRunning(false);
+      return;
+    }
+    try {
+      await stopLiveAutoClip(autoClipJob.job_id);
+      stopAutoClipPolling();
+      setAutoClipRunning(false);
+    } catch (e) {
+      // backend will finalize anyway
+    }
+  }, [autoClipJob, stopAutoClipPolling]);
+
+  // Clean up the auto-clip poller on unmount
+  useEffect(() => {
+    return () => {
+      stopAutoClipPolling();
+    };
+  }, [stopAutoClipPolling]);
+
   // Results
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
   const [activeClip, setActiveClip] = useState<ViralClip | null>(null);
@@ -522,6 +605,8 @@ export default function App() {
             // Multi-Segment Merged Highlight Video
             render_mode: settings.renderMode || 'separate',
             compilation_title: settings.compilationTitle || null,
+            // Auto Cover / Thumbnail
+            cover_enabled: settings.coverEnabled || false,
           },
           transcript: result.transcript,
         }),
@@ -1512,7 +1597,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url: targetAnalyzeUrl,
-          duration: durationPref,
+          duration: isTiktokUrl && durationPref === '15s' ? '30s' : durationPref,
           api_key: apiKey.trim() || undefined,
           model: selectedModel,
           provider: provider,
@@ -2752,6 +2837,143 @@ Transcript:
                   </div>
                 </div>
               )}
+
+              {/* LIVE AUTO-CLIP panel — grab the latest N seconds every interval */}
+              {(autoClipRunning || autoClipJob || (liveProbe && (liveProbe.is_live || liveProbe.live_status === 'is_live'))) && (
+                <div style={{
+                  marginTop: '0.35rem',
+                  padding: '1rem 1.1rem',
+                  borderRadius: '12px',
+                  border: '1px solid rgba(56, 189, 248, 0.35)',
+                  background: 'linear-gradient(135deg, rgba(56, 189, 248, 0.12) 0%, rgba(14, 165, 233, 0.04) 100%)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.75rem'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0 }}>
+                    <span style={{ fontSize: '1.15rem' }}>✂️</span>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: '0.86rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                        {t.form.autoClipTitle}
+                      </div>
+                      <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                        {t.form.autoClipHint}
+                      </div>
+                    </div>
+                  </div>
+
+                  {!autoClipRunning && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                        {t.form.autoClipEvery}
+                        <input
+                          type="number" min={1} max={720}
+                          value={autoClipInterval}
+                          onChange={(e) => {
+                            const v = Math.max(1, Math.min(720, parseInt(e.target.value || '60', 10) || 60));
+                            setAutoClipInterval(v);
+                            localStorage.setItem('cheat_clip_autoclip_interval', String(v));
+                          }}
+                          style={{ width: '4.5rem', padding: '0.3rem 0.5rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(0,0,0,0.25)', color: 'inherit' }}
+                        />
+                        {t.form.autoClipMinutes}
+                      </label>
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                        {t.form.autoClipTake}
+                        <input
+                          type="number" min={5} max={600}
+                          value={autoClipSeconds}
+                          onChange={(e) => {
+                            const v = Math.max(5, Math.min(600, parseInt(e.target.value || '60', 10) || 60));
+                            setAutoClipSeconds(v);
+                            localStorage.setItem('cheat_clip_autoclip_seconds', String(v));
+                          }}
+                          style={{ width: '4.5rem', padding: '0.3rem 0.5rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(0,0,0,0.25)', color: 'inherit' }}
+                        />
+                        {t.form.autoClipSecondsUnit}
+                      </label>
+                    </div>
+                  )}
+
+                  {autoClipRunning && autoClipJob && (
+                    <div style={{ display: 'flex', gap: '1.1rem', flexWrap: 'wrap', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                      <span>📊 {t.form.autoClipStatus}: <b style={{ color: '#7dd3fc' }}>
+                        {autoClipJob.status === 'capturing' ? t.form.autoClipCapturing
+                          : autoClipJob.status === 'waiting' ? t.form.autoClipWaiting
+                          : autoClipJob.status === 'starting' ? t.form.autoClipStarting
+                          : autoClipJob.status}
+                      </b></span>
+                      <span>🎬 {t.form.autoClipCount}: <b style={{ color: '#7dd3fc' }}>{autoClipJob.clips?.length || 0}</b></span>
+                      {typeof autoClipJob.seconds_to_next === 'number' && autoClipJob.status === 'waiting' && (
+                        <span>⏳ {t.form.autoClipNext}: <b style={{ color: '#7dd3fc' }}>{formatSeconds(autoClipJob.seconds_to_next)}</b></span>
+                      )}
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                    {!autoClipRunning ? (
+                      <button
+                        type="button"
+                        id="autoclip-start-btn"
+                        onClick={beginAutoClip}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+                          padding: '0.6rem 1.3rem', borderRadius: '10px', cursor: 'pointer',
+                          border: '1px solid rgba(56,189,248,0.5)',
+                          background: 'linear-gradient(135deg,#0ea5e9,#0369a1)',
+                          color: '#fff', fontWeight: 700, fontSize: '0.84rem',
+                          boxShadow: '0 0 16px rgba(56,189,248,0.35)'
+                        }}
+                      >
+                        ✂️ {t.form.autoClipStart}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        id="autoclip-stop-btn"
+                        onClick={haltAutoClip}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+                          padding: '0.6rem 1.3rem', borderRadius: '10px', cursor: 'pointer',
+                          border: '1px solid rgba(255,255,255,0.25)',
+                          background: 'rgba(255,255,255,0.1)',
+                          color: '#fff', fontWeight: 700, fontSize: '0.84rem'
+                        }}
+                      >
+                        ⏹ {t.form.autoClipStop}
+                      </button>
+                    )}
+                  </div>
+
+                  {autoClipJob && autoClipJob.clips && autoClipJob.clips.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                      {autoClipJob.clips.map((c) => (
+                        <div key={c.index} style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem',
+                          padding: '0.5rem 0.75rem', borderRadius: '8px',
+                          background: 'rgba(0,0,0,0.22)', border: '1px solid rgba(255,255,255,0.08)',
+                          fontSize: '0.78rem'
+                        }}>
+                          <span style={{ color: 'var(--text-secondary)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            🎞️ #{c.index} · {c.duration}s · {(c.size_bytes / 1048576).toFixed(1)} MB
+                          </span>
+                          <a
+                            href={c.download_url}
+                            download
+                            style={{
+                              flexShrink: 0, padding: '0.35rem 0.8rem', borderRadius: '8px',
+                              background: 'linear-gradient(135deg,#0ea5e9,#0369a1)', color: '#fff',
+                              fontWeight: 700, textDecoration: 'none', fontSize: '0.76rem'
+                            }}
+                          >
+                            ⬇ {t.form.autoClipDownload}
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -3280,7 +3502,9 @@ Transcript:
                       setDurationPref('15s');
                       localStorage.setItem('cheat_clip_duration_pref', '15s');
                     }}
-                    disabled={loading}
+                    disabled={loading || isTiktokUrl}
+                    title={isTiktokUrl ? 'TikTok: klip minimal 30 detik' : undefined}
+                    style={isTiktokUrl ? { opacity: 0.4, cursor: 'not-allowed' } : undefined}
                   >
                     {t.form.dur15s}
                   </button>
@@ -3321,6 +3545,11 @@ Transcript:
                 {durationPref === 'auto' && (
                   <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.3, marginTop: '0.1rem' }}>
                     💡 {t.form.durAutoTip}
+                  </span>
+                )}
+                {isTiktokUrl && (
+                  <span style={{ fontSize: '0.72rem', color: 'var(--accent, #fe2c55)', lineHeight: 1.3, marginTop: '0.1rem' }}>
+                    🎵 TikTok: durasi klip dikunci otomatis <b>30 detik – 1 menit</b>.
                   </span>
                 )}
               </div>

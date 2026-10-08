@@ -108,6 +108,11 @@ def _shutdown_live_recordings():
         stop_all_recordings()
     except Exception:
         pass
+    try:
+        from backend.services.live_autoclip_service import stop_all_autoclips
+        stop_all_autoclips()
+    except Exception:
+        pass
 
 logger.info("Cheat Clip PRO backend routers mounted successfully.")
 
