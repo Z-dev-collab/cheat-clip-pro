@@ -1539,8 +1539,10 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       subtitlePositionMode,
       subtitleCenterYPercent: safeSubCenterY,
       selectedClips: enrichedSelectedClips,
-      // Background Music
-      bgmEnabled: !!bgmFilePath,
+      // Background Music — respect the on/off checkbox (bgmEnabled) as well as
+      // the presence of an uploaded file. Previously this was `!!bgmFilePath`,
+      // so BGM was always applied whenever a file was loaded and the toggle did nothing.
+      bgmEnabled: !!(bgmEnabled && bgmFilePath),
       bgmFilePath,
       bgmFileName,
       bgmVolume,
@@ -2895,7 +2897,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   />
                   <div className="slider-quick-buttons">
                     <button type="button" onClick={() => setBgmVolume(10)}>10%</button>
-                    <button type="button" onClick={() => setBgmVolume(20)}>20% (Default)</button>
+                    <button type="button" onClick={() => setBgmVolume(DEFAULT_STUDIO_PREFS.bgmVolume)}>{DEFAULT_STUDIO_PREFS.bgmVolume}% (Default)</button>
                     <button type="button" onClick={() => setBgmVolume(35)}>35%</button>
                     <button type="button" onClick={() => setBgmVolume(50)}>50%</button>
                     <button type="button" onClick={() => setBgmVolume(80)}>80%</button>

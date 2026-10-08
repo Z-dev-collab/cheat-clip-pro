@@ -345,16 +345,28 @@ def get_yt_dlp_cookies_args() -> List[str]:
 def get_yt_dlp_base_cmd(include_cookies: bool = True) -> List[str]:
     """
     Returns base command for yt-dlp with JavaScript runtime, player extractor args, and cookies.
-    Tries standalone 'yt-dlp' executable first, then falls back to python module:
-    [sys.executable, "-m", "yt_dlp"] which works 100% of the time if installed via pip.
+
+    IMPORTANT: prefer running the `yt_dlp` Python module ([sys.executable, "-m", "yt_dlp"])
+    over the standalone 'yt-dlp' executable. The WinGet/standalone yt-dlp.exe is a
+    PyInstaller one-file binary that re-extracts a fresh `_MEI*` folder into %TEMP% on
+    EVERY launch. When that extraction fails (stale _MEI dirs piling up, disk pressure,
+    antivirus interference) the child process dies instantly with rc=3221225794
+    (0xC0000142 STATUS_DLL_INIT_FAILED) and EMPTY stderr, which surfaced to users as
+    "Failed to download video clip segment" for every fallback method. Running the
+    already-installed module has no extraction step and is far more reliable.
+    Falls back to the standalone exe only when the module is not importable.
     """
-    if shutil.which("yt-dlp"):
-        cmd = ["yt-dlp"]
-    else:
-        try:
-            import yt_dlp
-            cmd = [sys.executable, "-m", "yt_dlp"]
-        except ImportError:
+    cmd: Optional[List[str]] = None
+    try:
+        import yt_dlp  # noqa: F401
+        cmd = [sys.executable, "-m", "yt_dlp"]
+    except ImportError:
+        cmd = None
+
+    if cmd is None:
+        if shutil.which("yt-dlp"):
+            cmd = ["yt-dlp"]
+        else:
             raise RuntimeError(
                 "yt-dlp is not installed in this Python environment. "
                 "Please run 'pip install yt-dlp' or 'pip install -r backend/requirements.txt'."
