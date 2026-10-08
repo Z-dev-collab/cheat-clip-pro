@@ -60,6 +60,15 @@ export default function App() {
     const saved = parseInt(localStorage.getItem('cheat_clip_autoclip_seconds') || '', 10);
     return Number.isFinite(saved) && saved >= 5 ? saved : 60;
   });
+  // DVR (rewind) mode: when on, each capture starts N minutes BEHIND the live
+  // edge (0 = live edge). YouTube's DVR window is ~60 minutes.
+  const [autoClipDvr, setAutoClipDvr] = useState<boolean>(() => {
+    return localStorage.getItem('cheat_clip_autoclip_dvr') === '1';
+  });
+  const [autoClipBackMinutes, setAutoClipBackMinutes] = useState<number>(() => {
+    const saved = parseInt(localStorage.getItem('cheat_clip_autoclip_back_min') || '', 10);
+    return Number.isFinite(saved) && saved >= 0 && saved <= 60 ? saved : 60;
+  });
   const autoClipPollRef = useRef<number | null>(null);
   const [durationPref, setDurationPref] = useState<'15s' | '30s' | '60s' | 'auto'>(() => {
     const saved = localStorage.getItem('cheat_clip_duration_pref');
@@ -400,7 +409,8 @@ export default function App() {
     }
     setError(null);
     try {
-      const started = await startLiveAutoClip(u, autoClipInterval, autoClipSeconds, liveProbe?.title);
+      const backOffset = autoClipDvr ? Math.max(0, Math.min(3600, Math.round(autoClipBackMinutes * 60))) : 0;
+      const started = await startLiveAutoClip(u, autoClipInterval, autoClipSeconds, liveProbe?.title, backOffset);
       setAutoClipRunning(true);
       const poll = window.setInterval(async () => {
         try {
@@ -427,7 +437,7 @@ export default function App() {
     } catch (e: any) {
       setError(e?.message || t.form.autoClipFailed);
     }
-  }, [url, autoClipInterval, autoClipSeconds, liveProbe, stopAutoClipPolling, t]);
+  }, [url, autoClipInterval, autoClipSeconds, autoClipDvr, autoClipBackMinutes, liveProbe, stopAutoClipPolling, t]);
 
   const haltAutoClip = useCallback(async () => {
     if (!autoClipJob?.job_id) {
@@ -2881,10 +2891,10 @@ Transcript:
                       <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
                         {t.form.autoClipTake}
                         <input
-                          type="number" min={5} max={600}
+                          type="number" min={5} max={3600}
                           value={autoClipSeconds}
                           onChange={(e) => {
-                            const v = Math.max(5, Math.min(600, parseInt(e.target.value || '60', 10) || 60));
+                            const v = Math.max(5, Math.min(3600, parseInt(e.target.value || '60', 10) || 60));
                             setAutoClipSeconds(v);
                             localStorage.setItem('cheat_clip_autoclip_seconds', String(v));
                           }}
@@ -2892,6 +2902,34 @@ Transcript:
                         />
                         {t.form.autoClipSecondsUnit}
                       </label>
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }} title={t.form.autoClipDvrHint}>
+                        <input
+                          type="checkbox"
+                          checked={autoClipDvr}
+                          onChange={(e) => {
+                            setAutoClipDvr(e.target.checked);
+                            localStorage.setItem('cheat_clip_autoclip_dvr', e.target.checked ? '1' : '0');
+                          }}
+                          style={{ width: '1rem', height: '1rem', accentColor: '#0ea5e9' }}
+                        />
+                        {t.form.autoClipDvr}
+                      </label>
+                      {autoClipDvr && (
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                          {t.form.autoClipBack}
+                          <input
+                            type="number" min={0} max={60}
+                            value={autoClipBackMinutes}
+                            onChange={(e) => {
+                              const v = Math.max(0, Math.min(60, parseInt(e.target.value || '60', 10) || 0));
+                              setAutoClipBackMinutes(v);
+                              localStorage.setItem('cheat_clip_autoclip_back_min', String(v));
+                            }}
+                            style={{ width: '4.5rem', padding: '0.3rem 0.5rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(0,0,0,0.25)', color: 'inherit' }}
+                          />
+                          {t.form.autoClipMinutesBack}
+                        </label>
+                      )}
                     </div>
                   )}
 

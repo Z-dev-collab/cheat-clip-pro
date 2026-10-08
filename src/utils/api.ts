@@ -166,6 +166,7 @@ export interface AutoClipItem {
   download_url: string;
   size_bytes: number;
   duration: number;
+  back_offset_seconds?: number;
   created_at: number;
 }
 
@@ -177,23 +178,31 @@ export interface AutoClipStatus {
   interval_minutes?: number;
   interval_seconds?: number;
   clip_seconds?: number;
+  back_offset_seconds?: number;
+  dvr_mode?: boolean;
   clips: AutoClipItem[];
   seconds_to_next?: number;
   error?: string | null;
   ended_reason?: string;
 }
 
-/** Starts an auto-clip job for a live broadcast. */
+/** Starts an auto-clip job for a live broadcast.
+ *  `backOffsetSeconds` > 0 = DVR rewind mode: each capture starts that many
+ *  seconds behind the live edge (e.g. 3600 = from ~1 hour ago). */
 export async function startLiveAutoClip(
   url: string,
   intervalMinutes: number = 60,
   clipSeconds: number = 60,
-  title?: string
-): Promise<{ job_id: string; status: string; interval_minutes: number; clip_seconds: number }> {
+  title?: string,
+  backOffsetSeconds: number = 0
+): Promise<{ job_id: string; status: string; interval_minutes: number; clip_seconds: number; back_offset_seconds?: number; dvr_mode?: boolean }> {
   const res = await fetch('/api/live/autoclip/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, interval_minutes: intervalMinutes, clip_seconds: clipSeconds, title }),
+    body: JSON.stringify({
+      url, interval_minutes: intervalMinutes, clip_seconds: clipSeconds,
+      title, back_offset_seconds: backOffsetSeconds,
+    }),
   });
   if (!res.ok) {
     const j = await res.json().catch(() => ({}));

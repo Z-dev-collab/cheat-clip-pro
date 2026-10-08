@@ -45,6 +45,7 @@ class LiveAutoClipRequest(BaseModel):
     interval_minutes: int = 60
     clip_seconds: int = 60
     title: Optional[str] = None
+    back_offset_seconds: float = 0.0
 
 
 @router.post("/api/live/probe")
@@ -110,6 +111,7 @@ async def api_live_autoclip_start(req: LiveAutoClipRequest):
             interval_minutes=req.interval_minutes,
             clip_seconds=req.clip_seconds,
             title=req.title,
+            back_offset_seconds=req.back_offset_seconds,
         )
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Failed to start auto-clip: {e}")

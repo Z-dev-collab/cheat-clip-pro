@@ -1,11 +1,18 @@
 """
 Live auto-clip service.
 
-While a live broadcast is running, automatically grab a short clip straight
-from the LIVE EDGE every N minutes (default: every 60 minutes, 60 seconds
-long). Because each grab is cut from the live edge, only the most recent part
-of the stream is ever captured — nothing older than the configured clip length
-is kept, which is exactly the "only ~1 hour / most recent minute" behaviour.
+While a live broadcast is running, automatically grab a short clip every N
+minutes (default: every 60 minutes, 60 seconds long).
+
+Two capture modes:
+
+* **Live edge** (default): cut straight from the live edge — only the most
+  recent part of the stream is captured.
+* **DVR / rewind**: when `back_offset_seconds` > 0, each capture starts that
+  many seconds BEHIND the live edge (e.g. 3600 = from ~1 hour ago). YouTube's
+  live DVR window is ~60 minutes, so this is the maximum rewind available.
+  On HLS live streams `-ss` cannot seek backwards, so the rewind is done with
+  ffmpeg's `-live_start_index -N` (N = segments behind the edge).
 
 Every grab is saved as an ordinary local video inside UPLOADS_DIR so the whole
 existing pipeline (AI analysis, Clip Studio, subtitles, rendering) can process
@@ -36,6 +43,11 @@ CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 DEFAULT_INTERVAL_MINUTES = 60
 DEFAULT_CLIP_SECONDS = 60
+
+# DVR (rewind) mode: YouTube's live DVR window is ~60 minutes, so a capture may
+# start at most 60 minutes behind the live edge.
+MAX_BACK_OFFSET_SECONDS = 3600
+MAX_CLIP_SECONDS = 3600
 
 
 def _safe_name(text: str, fallback: str = "live") -> str:
@@ -70,14 +82,42 @@ def _resolve_live_stream_urls(url: str, timeout: int = 60) -> List[str]:
     return urls
 
 
-def _grab_live_clip(stream_urls: List[str], out_path: Path, clip_seconds: int) -> None:
-    """Record `clip_seconds` from the live edge into out_path (stream copy)."""
+SEGMENT_SECONDS = 5  # YouTube live HLS segment length (measured: 720 segs = 60 min)
+
+
+def _back_offset_to_start_index(back_offset_seconds: float) -> int:
+    """Convert a 'seconds behind live edge' offset into an HLS -live_start_index.
+
+    ffmpeg's `-live_start_index` counts segments BACK from the live edge
+    (negative = older). YouTube segments are ~5s, so 3600s -> -720.
+    """
+    back = max(0.0, float(back_offset_seconds or 0.0))
+    if back <= 0.0:
+        return -3  # ~live edge (small buffer so ffmpeg has data to read)
+    return -int(round(back / SEGMENT_SECONDS))
+
+
+def _grab_live_clip(stream_urls: List[str], out_path: Path, clip_seconds: int,
+                    back_offset_seconds: float = 0.0) -> None:
+    """Record `clip_seconds` into out_path (stream copy).
+
+    When `back_offset_seconds` > 0 the capture starts that many seconds BEHIND
+    the live edge (DVR rewind), e.g. 3600 = start from ~1 hour ago. With 0 it
+    records straight from the live edge.
+
+    NOTE: on HLS live streams `-ss` does NOT seek backwards (verified: ffmpeg
+    always fetches the live-edge segments regardless of -ss). The only reliable
+    rewind is `-live_start_index -N` (N = segments behind the edge), applied to
+    EACH input.
+    """
+    start_index = _back_offset_to_start_index(back_offset_seconds)
     cmd = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-rw_timeout", "15000000",           # abort if the socket stalls 15s
     ]
     for u in stream_urls:
-        cmd += ["-i", u]
+        # -live_start_index must precede each -i it applies to.
+        cmd += ["-live_start_index", str(start_index), "-i", u]
     cmd += ["-t", str(int(clip_seconds))]
     if len(stream_urls) >= 2:
         # Separate video + audio streams -> map explicitly.
@@ -110,14 +150,20 @@ def start_live_autoclip(
     interval_minutes: int = DEFAULT_INTERVAL_MINUTES,
     clip_seconds: int = DEFAULT_CLIP_SECONDS,
     title: Optional[str] = None,
+    back_offset_seconds: float = 0.0,
 ) -> dict:
-    """Registers a job and launches its background capture loop. Returns {job_id,...}."""
+    """Registers a job and launches its background capture loop. Returns {job_id,...}.
+
+    `back_offset_seconds` > 0 enables DVR (rewind) mode: every capture starts
+    that many seconds behind the live edge instead of at it.
+    """
     clean = (url or "").strip()
     if not clean:
         raise ValueError("URL is required")
 
     interval_minutes = max(1, int(interval_minutes or DEFAULT_INTERVAL_MINUTES))
-    clip_seconds = max(5, min(600, int(clip_seconds or DEFAULT_CLIP_SECONDS)))
+    clip_seconds = max(5, min(MAX_CLIP_SECONDS, int(clip_seconds or DEFAULT_CLIP_SECONDS)))
+    back_offset_seconds = max(0.0, min(float(MAX_BACK_OFFSET_SECONDS), float(back_offset_seconds or 0.0)))
 
     job_id = uuid.uuid4().hex[:8]
     token = uuid.uuid4().hex[:6]
@@ -131,6 +177,8 @@ def start_live_autoclip(
         "interval_seconds": interval_minutes * 60,
         "interval_minutes": interval_minutes,
         "clip_seconds": clip_seconds,
+        "back_offset_seconds": back_offset_seconds,
+        "dvr_mode": back_offset_seconds > 0.0,
         "started_at": time.time(),
         "next_clip_at": None,
         "clips": [],                   # [{index, filename, file_path, video_url, download_url, size_bytes, duration, created_at}]
@@ -151,6 +199,8 @@ def start_live_autoclip(
         "status": "starting",
         "interval_minutes": interval_minutes,
         "clip_seconds": clip_seconds,
+        "back_offset_seconds": back_offset_seconds,
+        "dvr_mode": back_offset_seconds > 0.0,
     }
 
 
@@ -195,6 +245,7 @@ async def _autoclip_loop(job_id: str):
 
     interval = int(job["interval_seconds"])
     clip_seconds = int(job["clip_seconds"])
+    back_offset = float(job.get("back_offset_seconds") or 0.0)
     url = job["url"]
     token = job["token"]
 
@@ -221,7 +272,7 @@ async def _autoclip_loop(job_id: str):
 
             try:
                 stream_urls = await asyncio.to_thread(_resolve_live_stream_urls, url)
-                await asyncio.to_thread(_grab_live_clip, stream_urls, out_path, clip_seconds)
+                await asyncio.to_thread(_grab_live_clip, stream_urls, out_path, clip_seconds, back_offset)
                 size = out_path.stat().st_size
                 job["clips"].append({
                     "index": index,
@@ -231,6 +282,7 @@ async def _autoclip_loop(job_id: str):
                     "download_url": f"/api/live/autoclip/download/{job_id}/{index}",
                     "size_bytes": size,
                     "duration": clip_seconds,
+                    "back_offset_seconds": back_offset,
                     "created_at": time.time(),
                 })
                 job["error"] = None
