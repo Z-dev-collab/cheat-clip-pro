@@ -98,7 +98,7 @@ pip install yt-dlp
 
 ## 🎯 Cara Pakai Singkat
 
-1. **Tempel URL** video (YouTube / Drive / live / situs film / `.mp4` / `.m3u8`) di kolom atas.
+1. **Tempel URL** video (YouTube / Drive / live / `.mp4` / `.m3u8`) di kolom atas, **atau** pakai tab **Cari Film (Archive.org)** untuk film domain-publik.
 2. **Pilih durasi** — `~15s` (hook cepat), `~30s` (standar), `~60s` (cerita).
 3. Klik **“Analisis Video”** → AI mencari momen paling menarik.
 4. **Atur di Clip Studio** — rasio 9:16, face tracking, gaya subtitle, watermark, musik, akselerasi hardware.
@@ -144,15 +144,32 @@ Menjawab pertanyaan *“berapa kali upload per jam yang pas?”* — panel **⏰
 
 ---
 
-## 🎬 Cara Meng-clip Film dari Situs Mana Pun (per part)
+## 🎬 Cari Film & Clip per Part (Archive.org — legal)
 
-1. Tempel link halaman video dari **situs film apa pun** (lk21, idlix, dll.), link langsung `.mp4`, atau stream HLS `.m3u8`.
-2. Aplikasi otomatis mengenali sumber non-YouTube/Drive dan mengunduh lewat `yt-dlp` (dengan cookies browser bila ada).
-   * Progres unduhan ditampilkan real-time (**Mengunduh dari &lt;situs&gt;**).
+Fitur **🔎 Cari Film (Archive.org)** memungkinkan mencari film dari judul, memilih **part/segmen**, meninjau (**preview**) lalu meng-clip — semuanya dari **Internet Archive (archive.org)**, arsip film **domain-publik & berlisensi terbuka**. Tidak ada situs bajakan yang dipakai.
+
+**Cara pakai:**
+1. Pilih tab **🏛️ Cari Film (Archive.org)** di atas.
+2. Tulis **judul film** (mis. `Night of the Living Dead`, `Dracula 1931`) → **Cari**.
+3. Klik poster hasil → muncul daftar **part / berkas video** (mis. `Night.mp4`, `VTS_01_1.mp4`) beserta format, ukuran, dan durasi.
+4. Pilih satu part → **preview** langsung di panel (streaming via backend, tanpa menunggu unduh penuh).
+5. (Opsional) **Tandai awal / Tandai akhir** untuk membatasi rentang klip, lalu **Putar segmen**.
+6. Klik **⬇️ Unduh part & siapkan klip** → progres unduhan tampil real-time → video otomatis masuk ke pipeline analisis (Whisper + deteksi klip) yang sama.
+7. Klik **Analisis** untuk membuat klip seperti biasa.
+
+> Sumber hanya **Internet Archive** (legal, API publik, tanpa captcha). Endpoint: `POST /api/film/search`, `GET /api/film/parts/{identifier}`, `GET /api/film/preview/{identifier}/{file}` (proxy HTTP Range), `POST /api/film/download` (progres SSE).
+
+---
+
+## 🎬 Meng-clip dari Link Video Langsung (.mp4 / .m3u8)
+
+1. Tempel link langsung `.mp4` atau stream HLS `.m3u8` yang **berhak Anda akses**.
+2. Aplikasi mengunduh lewat `yt-dlp` (dengan cookies browser bila ada).
+   * Progres unduhan ditampilkan real-time (**Mengunduh dari &lt;sumber&gt;**).
 3. Video **di-cache** — analisis link sama lagi jadi instan.
 4. Di **Riwayat**, sumber ini diberi label **🎬 Film / Site**.
 
-> Cocok untuk membuat **clip per part** dari serial/film.
+> Gunakan hanya untuk konten yang Anda miliki haknya. Untuk film klasik/domain-publik, pakai tab **Cari Film (Archive.org)** di atas.
 
 ---
 

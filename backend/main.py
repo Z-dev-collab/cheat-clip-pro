@@ -11,6 +11,7 @@ from backend.routers import (
     analyze_router,
     cookies_router,
     downloads_router,
+    film_router,
     live_router,
     media_router,
     render_router,
@@ -96,6 +97,7 @@ app.include_router(cookies_router)
 app.include_router(downloads_router)
 app.include_router(system_router)
 app.include_router(live_router)
+app.include_router(film_router)
 
 
 @app.on_event("shutdown")

@@ -5,6 +5,7 @@ import { ClipStudioSection } from './components/ClipStudioSection';
 import { CookiesModal } from './components/CookiesModal';
 import { ClipTrimmerModal } from './components/ClipTrimmerModal';
 import { AppUpdateModal } from './components/AppUpdateModal';
+import { ArchiveFilmPanel } from './components/ArchiveFilmPanel';
 import { resilientFetch, probeLive, startLiveRecord, getLiveRecordStatus, stopLiveRecord } from './utils/api';
 import type { LiveProbeResult, LiveRecordStatus } from './utils/api';
 import { useLanguage } from './locales';
@@ -22,7 +23,7 @@ export default function App() {
   const { t } = useLanguage();
   const [url, setUrl] = useState('');
   const [gdriveUrl, setGdriveUrl] = useState('');
-  const [sourceMode, setSourceMode] = useState<'youtube' | 'gdrive' | 'upload'>('youtube');
+  const [sourceMode, setSourceMode] = useState<'youtube' | 'gdrive' | 'upload' | 'archive'>('youtube');
   const [uploadedVideoFile, setUploadedVideoFile] = useState<File | null>(null);
   const [uploadedVideoInfo, setUploadedVideoInfo] = useState<{
     videoId: string;
@@ -1309,9 +1310,9 @@ export default function App() {
   const handleAnalyze = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
 
-    if (sourceMode === 'upload') {
+    if (sourceMode === 'upload' || sourceMode === 'archive') {
       if (!uploadedVideoFile && !uploadedVideoInfo) {
-        setError(t.errors.chooseVideoFilePrompt);
+        setError(sourceMode === 'archive' ? t.archive.readyNotice : t.errors.chooseVideoFilePrompt);
         return;
       }
     } else if (sourceMode === 'gdrive') {
@@ -1377,7 +1378,7 @@ export default function App() {
     let targetAnalyzeUrl = sourceMode === 'gdrive' ? gdriveUrl.trim() : url.trim();
     let videoId = extractVideoId(targetAnalyzeUrl);
 
-    if (sourceMode === 'upload') {
+    if (sourceMode === 'upload' || sourceMode === 'archive') {
       setLoading(true);
       setError(null);
       setResult(null);
@@ -2552,6 +2553,40 @@ Transcript:
               </svg>
               {t.form.tabUpload}
             </button>
+
+            {/* Archive.org Tab — legal public-domain movie search */}
+            <button
+              type="button"
+              id="source-mode-archive"
+              className={`source-tab-btn ${sourceMode === 'archive' ? 'active' : ''}`}
+              onClick={() => {
+                setSourceMode('archive');
+                setError(null);
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                padding: '0.55rem 1.1rem',
+                borderRadius: '10px',
+                border: sourceMode === 'archive' ? '1px solid rgba(245, 158, 11, 0.45)' : '1px solid rgba(255,255,255,0.08)',
+                background: sourceMode === 'archive' ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.22) 0%, rgba(217, 119, 6, 0.08) 100%)' : 'rgba(255,255,255,0.03)',
+                color: sourceMode === 'archive' ? '#fff' : 'var(--text-secondary)',
+                cursor: 'pointer',
+                fontWeight: 600,
+                fontSize: '0.85rem',
+                transition: 'all 0.2s ease',
+                boxShadow: sourceMode === 'archive' ? '0 0 15px rgba(245, 158, 11, 0.22)' : 'none'
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#f59e0b' }}>
+                <path d="M3 21V8l9-5 9 5v13"></path>
+                <path d="M3 21h18"></path>
+                <path d="M9 21v-6h6v6"></path>
+                <path d="M9 12h6"></path>
+              </svg>
+              {t.archive.tabLabel}
+            </button>
           </div>
 
           {/* YouTube input mode */}
@@ -2933,6 +2968,100 @@ Transcript:
                           {t.form.uploadingVideo}
                         </>
                       ) : loading ? (
+                        <>
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="spinner-icon" style={{ animation: 'spin 1s linear infinite' }}>
+                            <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
+                          </svg>
+                          {t.form.processing}
+                        </>
+                      ) : (
+                        <>
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                          </svg>
+                          {t.form.hackClips}
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Archive.org mode — legal public-domain movie search + part picker + preview */}
+          {sourceMode === 'archive' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <ArchiveFilmPanel
+                onReady={(info, title) => {
+                  setUploadedVideoFile(null);
+                  setUploadedVideoInfo({
+                    videoId: info.videoId,
+                    filename: title || info.filename,
+                    savedName: info.savedName,
+                    duration: info.duration,
+                    videoUrl: info.videoUrl,
+                    filePath: info.filePath,
+                    width: info.width,
+                    height: info.height,
+                  });
+                  setError(null);
+                }}
+                onSegment={(startSecs, endSecs) => {
+                  if (startSecs == null && endSecs == null) {
+                    setRangeType('entire');
+                    setCustomRangeStart('');
+                    setCustomRangeEnd('');
+                  } else {
+                    setRangeType('custom');
+                    setCustomRangeStart(startSecs != null ? formatSeconds(startSecs) : '');
+                    setCustomRangeEnd(endSecs != null ? formatSeconds(endSecs) : '');
+                  }
+                }}
+              />
+
+              {uploadedVideoInfo && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '1.25rem 1.5rem',
+                  borderRadius: '12px',
+                  background: 'rgba(245, 158, 11, 0.08)',
+                  border: '1px solid rgba(245, 158, 11, 0.28)',
+                  flexWrap: 'wrap',
+                  gap: '1rem',
+                }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {uploadedVideoInfo.filename}
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                      {uploadedVideoInfo.duration > 0 && <span>⏱ {Math.round(uploadedVideoInfo.duration)}s · </span>}
+                      <span style={{ color: '#10b981', fontWeight: 600 }}>✨ {t.archive.readyNotice}</span>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <button
+                      type="button"
+                      onClick={() => { setUploadedVideoInfo(null); setRangeType('entire'); setCustomRangeStart(''); setCustomRangeEnd(''); }}
+                      disabled={loading}
+                      style={{
+                        padding: '0.5rem 1rem', borderRadius: '8px',
+                        background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+                        color: 'var(--text-secondary)', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer',
+                      }}
+                    >
+                      {t.form.changeVideo}
+                    </button>
+                    <button
+                      id="analyze-archive-btn"
+                      type="submit"
+                      className="glowing-btn"
+                      disabled={loading}
+                      style={{ height: '42px', padding: '0 2rem' }}
+                    >
+                      {loading ? (
                         <>
                           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="spinner-icon" style={{ animation: 'spin 1s linear infinite' }}>
                             <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
