@@ -3699,41 +3699,75 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
           {/* Batch Clip Hook / Title Customizer for All Selected Clips */}
           <div className="studio-card-group">
-            <div className="group-header">
+            <div className="group-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '0.5rem', flexWrap: 'wrap' }}>
               <span className="group-title">{t.studio.batchClipTitlesTitle}</span>
-              <span className="group-badge">
-                {selectedClips.length} {selectedClips.length === 1 ? t.studio.clipSelectedSingle : t.studio.clipSelectedPlural}
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <span className="group-badge">
+                  {selectedClips.length}/{previewClips.length} {t.studio.clipSelectedPlural}
+                </span>
+                {previewClips.length > 0 && (
+                  <button
+                    type="button"
+                    className="studio-checklist-toggle-btn"
+                    onClick={handleToggleAllClips}
+                    title={selectedClips.length === previewClips.length ? t.studio.unmarkAllClips : t.studio.markAllClips}
+                    style={{
+                      background: selectedClips.length === previewClips.length ? 'rgba(239, 68, 68, 0.12)' : 'rgba(168, 85, 247, 0.15)',
+                      border: selectedClips.length === previewClips.length ? '1px solid rgba(239, 68, 68, 0.35)' : '1px solid rgba(168, 85, 247, 0.4)',
+                      color: selectedClips.length === previewClips.length ? '#f87171' : 'var(--primary, #a855f7)',
+                      borderRadius: '6px',
+                      padding: '0.22rem 0.55rem',
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.3rem',
+                      transition: 'all 0.2s ease',
+                    }}
+                  >
+                    {selectedClips.length === previewClips.length ? t.studio.unmarkAllClips : t.studio.markAllClips}
+                  </button>
+                )}
+              </div>
             </div>
 
             <p style={{ fontSize: '0.74rem', color: 'var(--text-muted)', margin: '0 0 0.75rem 0', lineHeight: 1.45 }}>
               {t.studio.batchClipTitlesDesc}
             </p>
 
-            {selectedClips.length === 0 ? (
+            {previewClips.length === 0 ? (
               <div className="batch-titles-empty-box">
                 <span>ℹ️</span>
                 <span>{t.studio.batchClipTitlesEmpty}</span>
               </div>
             ) : (
               <div className="batch-titles-list">
-                {selectedClips.map((clip, i) => {
+                {previewClips.map((clip, i) => {
                   const clipKey = `${clip.start_time}_${clip.end_time}`;
                   const custom = customClipTitles[clipKey];
                   const originalSuggestion = (clip.title_suggestion || clip.title || '').trim();
                   const baseTitle = (custom !== undefined && custom.trim() !== '') ? custom : originalSuggestion;
                   const hasCustomTitle = custom !== undefined && custom.trim() !== '' && custom.trim() !== originalSuggestion;
                   const isCurrentActivePreview = currentPreviewClip && currentPreviewClip.start_time === clip.start_time && currentPreviewClip.end_time === clip.end_time;
-                  const originalIndex = previewClips.findIndex(c => c.start_time === clip.start_time && c.end_time === clip.end_time);
-                  const clipDisplayNum = originalIndex !== -1 ? originalIndex + 1 : i + 1;
+                  const isChecked = selectedClips.some(c => c.start_time === clip.start_time && c.end_time === clip.end_time);
+                  const selectedIdx = selectedClips.findIndex(c => c.start_time === clip.start_time && c.end_time === clip.end_time);
+                  const clipDisplayNum = i + 1;
 
                   return (
                     <div
                       key={clipKey}
-                      className={`batch-title-card-item ${isCurrentActivePreview ? 'active-preview-border' : ''}`}
+                      className={`batch-title-card-item ${isCurrentActivePreview ? 'active-preview-border' : ''} ${isChecked ? '' : 'is-unchecked'}`}
                     >
                       <div className="batch-title-card-header">
                         <div className="batch-title-card-left">
+                          <label className="batch-title-checkbox" title={isChecked ? t.studio.unmarkClip : t.studio.markClip}>
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => toggleClip(clip)}
+                            />
+                          </label>
                           <span className="batch-title-clip-badge">#{clipDisplayNum}</span>
                           <span className="batch-title-ts">
                             ⏱️ {Math.floor(clip.start_time / 60)}:{(clip.start_time % 60).toFixed(0).padStart(2, '0')} - {Math.floor(clip.end_time / 60)}:{(clip.end_time % 60).toFixed(0).padStart(2, '0')} ({(clip.end_time - clip.start_time).toFixed(0)}s)
@@ -3744,13 +3778,13 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         </div>
 
                         <div className="batch-title-card-right">
-                          {renderMode === 'merged' && (
+                          {renderMode === 'merged' && isChecked && (
                             <div className="segment-reorder-group">
                               <button
                                 type="button"
                                 className="segment-reorder-btn"
-                                onClick={() => handleMoveClipUp(i)}
-                                disabled={i === 0}
+                                onClick={() => handleMoveClipUp(selectedIdx)}
+                                disabled={selectedIdx === 0}
                                 title={t.studio.moveSegmentUp}
                               >
                                 ▲
@@ -3758,8 +3792,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                               <button
                                 type="button"
                                 className="segment-reorder-btn"
-                                onClick={() => handleMoveClipDown(i)}
-                                disabled={i === selectedClips.length - 1}
+                                onClick={() => handleMoveClipDown(selectedIdx)}
+                                disabled={selectedIdx === selectedClips.length - 1}
                                 title={t.studio.moveSegmentDown}
                               >
                                 ▼
@@ -3786,9 +3820,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                             type="button"
                             className={`batch-title-preview-btn ${isCurrentActivePreview ? 'is-active' : ''}`}
                             onClick={() => {
-                              if (originalIndex !== -1) {
-                                setPreviewClipIndex(originalIndex);
-                              }
+                              setPreviewClipIndex(i);
                             }}
                             title={isCurrentActivePreview ? t.studio.batchClipTitlesActivePreview : t.studio.batchClipTitlesPreviewBtn}
                           >

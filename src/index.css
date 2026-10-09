@@ -1842,6 +1842,31 @@ label[for="manual-subtitle-file"]:hover {
   box-shadow: 0 0 12px rgba(56, 189, 248, 0.15);
 }
 
+.batch-title-card-item.is-unchecked {
+  opacity: 0.5;
+  border-color: rgba(255, 255, 255, 0.05);
+}
+
+.batch-title-card-item.is-unchecked:hover {
+  opacity: 0.8;
+}
+
+.batch-title-checkbox {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.batch-title-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary, #a855f7);
+  cursor: pointer;
+  margin: 0;
+}
+
 .batch-title-card-header {
   display: flex;
   align-items: center;
