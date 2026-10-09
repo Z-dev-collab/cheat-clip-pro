@@ -833,7 +833,12 @@ async def analyze_video(request: AnalyzeRequest):
                         # broadcast media locally and transcribe it offline with
                         # Whisper. The captured file is then served so the clip
                         # renders (and the player) work from it too.
-                        if is_live or live_status in ('is_live', 'is_upcoming', 'post_live'):
+                        # A broadcast that has already finished is reported by
+                        # yt-dlp as "was_live" (now a VOD) rather than "post_live",
+                        # so it must be included here too — otherwise a just-ended
+                        # stream with captions disabled dead-ends instead of being
+                        # captured and transcribed offline.
+                        if is_live or live_status in ('is_live', 'is_upcoming', 'post_live', 'was_live'):
                             yield _sse({
                                 "step": 3,
                                 "step_progress": 30,
