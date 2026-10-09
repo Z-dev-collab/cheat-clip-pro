@@ -49,12 +49,22 @@ export interface NewFilmClip {
   title: string;
   start_time: number;
   end_time: number;
+  caption?: string;
 }
 
 interface Props {
   videoUrl: string;
   duration: number;
   t: any;
+  /** Film / source title used to auto-build "Title\nPart N" clip titles. */
+  title?: string;
+  /** LLM settings so the panel can request per-part caption recommendations. */
+  aiProvider?: string;
+  aiBaseUrl?: string;
+  aiApiKey?: string;
+  aiModel?: string;
+  /** Output language name for captions ("auto" = keep the film's language). */
+  language?: string;
   /** Hand generated parts/trailer to the studio as renderable clips. */
   onAddClips: (clips: NewFilmClip[]) => void;
   /** Route a downloaded track into the studio BGM slot. */
@@ -74,18 +84,41 @@ const fmtClock = (s: number): string => {
   return `${m}:${sec.toString().padStart(2, '0')}`;
 };
 
+/**
+ * Build a two-line clip title: the film title on the first line and "Part N"
+ * on the second, e.g. "Judul Film\nPart 1". Falls back to the part label when
+ * no film title is available. The manual newline survives wrap_title_smart in
+ * the renderer, so it renders as two lines on the video.
+ */
+const buildPartTitle = (filmTitle: string | undefined, label: string, index: number): string => {
+  const partLine = (label || `Part ${index + 1}`).trim();
+  const base = (filmTitle || '').trim();
+  if (!base) return partLine;
+  return `${base}\n${partLine}`;
+};
+
 export default function FilmToolsPanel({
   videoUrl,
   duration,
   t,
+  title,
+  aiProvider,
+  aiBaseUrl,
+  aiApiKey,
+  aiModel,
+  language,
   onAddClips,
   onUseBgm,
   currentBgmName,
 }: Props) {
-  const [partSeconds, setPartSeconds] = useState<number>(60);
+  const [partSeconds, setPartSeconds] = useState<number>(150);
   const [planning, setPlanning] = useState<boolean>(false);
   const [plan, setPlan] = useState<FilmSegmentsPlan | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
+  // Per-part caption recommendations, keyed by part index.
+  const [captions, setCaptions] = useState<Record<number, string>>({});
+  const [captioning, setCaptioning] = useState<boolean>(false);
+  const [captionError, setCaptionError] = useState<string | null>(null);
 
   const [mood, setMood] = useState<string>('epic');
   const [tracks, setTracks] = useState<BgmTrack[]>([]);
@@ -95,6 +128,52 @@ export default function FilmToolsPanel({
   const [bgmHint, setBgmHint] = useState<string | null>(null);
 
   const sseAbortRef = useRef<AbortController | null>(null);
+
+  const buildClips = useCallback((parts: FilmPart[], caps: Record<number, string>): NewFilmClip[] => (
+    parts.map((p) => ({
+      title: buildPartTitle(title, p.label, p.index),
+      start_time: p.start_time,
+      end_time: p.end_time,
+      caption: caps[p.index] || undefined,
+    }))
+  ), [title]);
+
+  const fetchCaptions = useCallback(async (parts: FilmPart[]): Promise<Record<number, string>> => {
+    if (!parts.length) return {};
+    setCaptioning(true);
+    setCaptionError(null);
+    try {
+      const res = await fetch('/api/film/captions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: (title || '').trim() || 'Film',
+          parts: parts.map((p) => ({ index: p.index, label: p.label })),
+          language: language || 'auto',
+          provider: aiProvider || null,
+          base_url: aiBaseUrl || null,
+          api_key: aiApiKey || null,
+          model: aiModel || null,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || t.captionFailed);
+      }
+      const data = await res.json();
+      const map: Record<number, string> = {};
+      (data?.captions || []).forEach((c: any) => {
+        if (typeof c?.index === 'number' && c?.caption) map[c.index] = c.caption;
+      });
+      setCaptions(map);
+      return map;
+    } catch (e: any) {
+      setCaptionError(e.message || t.captionFailed);
+      return {};
+    } finally {
+      setCaptioning(false);
+    }
+  }, [title, language, aiProvider, aiBaseUrl, aiApiKey, aiModel, t.captionFailed]);
 
   const generatePlan = useCallback(async () => {
     if (!duration || duration <= 0) {
@@ -124,31 +203,29 @@ export default function FilmToolsPanel({
       // Auto-add every consecutive part straight away so the whole film can be
       // rendered as an ordered batch of clips without a click per part.
       if (data.parts?.length) {
-        onAddClips(data.parts.map((p) => ({
-          title: p.label || `Part ${p.index + 1}`,
-          start_time: p.start_time,
-          end_time: p.end_time,
-        })));
+        const caps = await fetchCaptions(data.parts);
+        onAddClips(buildClips(data.parts, caps));
       }
     } catch (e: any) {
       setPlanError(e.message || t.planFailed);
     } finally {
       setPlanning(false);
     }
-  }, [duration, partSeconds, videoUrl, onAddClips, t.planFailed]);
+  }, [duration, partSeconds, videoUrl, onAddClips, t.planFailed, fetchCaptions, buildClips]);
 
   const addAllParts = useCallback(() => {
     if (!plan?.parts?.length) return;
-    onAddClips(plan.parts.map((p) => ({
-      title: p.label || `Part ${p.index + 1}`,
-      start_time: p.start_time,
-      end_time: p.end_time,
-    })));
-  }, [plan, onAddClips]);
+    onAddClips(buildClips(plan.parts, captions));
+  }, [plan, onAddClips, captions, buildClips]);
 
   const addPart = useCallback((p: FilmPart) => {
-    onAddClips([{ title: p.label || `Part ${p.index + 1}`, start_time: p.start_time, end_time: p.end_time }]);
-  }, [onAddClips]);
+    onAddClips([{
+      title: buildPartTitle(title, p.label, p.index),
+      start_time: p.start_time,
+      end_time: p.end_time,
+      caption: captions[p.index] || undefined,
+    }]);
+  }, [onAddClips, title, captions]);
 
   const recommend = useCallback(async () => {
     setRecommending(true);
@@ -246,7 +323,7 @@ export default function FilmToolsPanel({
             min={5}
             max={3600}
             value={partSeconds}
-            onChange={(e) => setPartSeconds(Math.max(5, Math.min(3600, Number(e.target.value) || 60)))}
+            onChange={(e) => setPartSeconds(Math.max(5, Math.min(3600, Number(e.target.value) || 150)))}
             style={{
               width: '96px', padding: '0.45rem 0.6rem', borderRadius: '8px',
               border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.03)',
@@ -282,6 +359,16 @@ export default function FilmToolsPanel({
         </div>
       )}
 
+      {captionError && (
+        <div style={{
+          padding: '0.6rem 0.85rem', borderRadius: '9px',
+          background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.35)',
+          color: '#fca5a5', fontSize: '0.8rem',
+        }}>
+          {captionError}
+        </div>
+      )}
+
       {plan && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.6rem' }}>
@@ -312,27 +399,44 @@ export default function FilmToolsPanel({
                 <div
                   key={`${p.index}_${p.start_time}`}
                   style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    padding: '0.35rem 0.6rem', borderRadius: '7px',
+                    display: 'flex', flexDirection: 'column', gap: '0.3rem',
+                    padding: '0.4rem 0.6rem', borderRadius: '7px',
                     background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
                   }}
                 >
-                  <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                    <strong style={{ color: 'var(--text-primary)' }}>{p.label}</strong>
-                    {' · '}{fmtClock(p.start_time)}–{fmtClock(p.end_time)} ({Math.round(p.duration)}s)
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => addPart(p)}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem' }}>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                      <strong style={{ color: 'var(--text-primary)' }}>{p.label}</strong>
+                      {' · '}{fmtClock(p.start_time)}–{fmtClock(p.end_time)} ({Math.round(p.duration)}s)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => addPart(p)}
+                      style={{
+                        flexShrink: 0, padding: '0.2rem 0.6rem', borderRadius: '6px',
+                        border: '1px solid rgba(168, 85, 247, 0.4)',
+                        background: 'rgba(168, 85, 247, 0.12)', color: 'var(--primary, #a855f7)',
+                        fontWeight: 600, fontSize: '0.72rem', cursor: 'pointer',
+                      }}
+                    >
+                      {t.addPart}
+                    </button>
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                    {t.captionLabel}
+                  </div>
+                  <textarea
+                    rows={2}
+                    value={captions[p.index] ?? ''}
+                    placeholder={captioning ? t.captionGenerating : t.captionPlaceholder}
+                    onChange={(e) => setCaptions((prev) => ({ ...prev, [p.index]: e.target.value }))}
                     style={{
-                      padding: '0.2rem 0.6rem', borderRadius: '6px',
-                      border: '1px solid rgba(168, 85, 247, 0.4)',
-                      background: 'rgba(168, 85, 247, 0.12)', color: 'var(--primary, #a855f7)',
-                      fontWeight: 600, fontSize: '0.72rem', cursor: 'pointer',
+                      width: '100%', boxSizing: 'border-box', resize: 'vertical',
+                      padding: '0.4rem 0.55rem', borderRadius: '7px',
+                      border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.04)',
+                      color: 'var(--text-primary)', fontSize: '0.76rem', fontFamily: 'inherit',
                     }}
-                  >
-                    {t.addPart}
-                  </button>
+                  />
                 </div>
               ))}
             </div>

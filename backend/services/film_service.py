@@ -353,7 +353,7 @@ def cleanup_stale_film_downloads(max_age_hours: int = 72) -> int:
 # Film segmentation: trailer + consecutive 60s parts until the film ends
 # ─────────────────────────────────────────────────────────────────────────────
 
-DEFAULT_PART_SECONDS = 60.0
+DEFAULT_PART_SECONDS = 150.0
 MIN_PART_SECONDS = 5.0
 MAX_PART_SECONDS = 3600.0
 DEFAULT_TRAILER_SECONDS = 60.0

@@ -51,6 +51,7 @@ def _clip_record(c: Dict[str, Any]) -> Dict[str, Any]:
         "clip_index": c.get("clip_index"),
         "title": c.get("title"),
         "base_title": c.get("base_title"),
+        "caption": c.get("caption"),
         "status": c.get("status"),
         "download_url": c.get("download_url"),
         "cover_url": c.get("cover_url"),

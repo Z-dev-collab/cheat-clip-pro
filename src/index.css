@@ -4453,6 +4453,19 @@ label[for="manual-subtitle-file"]:hover {
   margin-left: 0.35rem;
 }
 
+.render-history-caption {
+  font-size: 0.7rem;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  background: rgba(168, 85, 247, 0.08);
+  border: 1px solid rgba(168, 85, 247, 0.22);
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+  margin-left: 1.4rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .render-history-empty-detail {
   font-size: 0.72rem;
   color: var(--text-muted);

@@ -86,6 +86,7 @@ async def start_batch_render(request: RenderBatchRequest, background_tasks: Back
                 "clip_index": idx,
                 "title": full_t,
                 "base_title": base_t,
+                "caption": (c.get("caption") or c.get("caption_suggestion") or None),
                 "status": "pending",
                 "progress_percent": 0
             })

@@ -5504,6 +5504,12 @@ Transcript:
           }}
           onRetryClip={handleRetryBatchClip}
           videoDuration={result?.duration || 0}
+          videoTitle={result?.title}
+          aiProvider={provider}
+          aiBaseUrl={baseUrl}
+          aiApiKey={apiKey}
+          aiModel={selectedModel}
+          language={titleLanguage}
         />
       )}
 

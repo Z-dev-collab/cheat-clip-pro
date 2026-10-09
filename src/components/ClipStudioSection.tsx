@@ -42,6 +42,15 @@ interface ClipStudioSectionProps {
   onRetryClip?: (clipIndex?: number) => void;
   /** Full duration of the source video (seconds) — used by the film tools panel. */
   videoDuration?: number;
+  /** Source/film title — used to auto-build "Title\nPart N" clip titles. */
+  videoTitle?: string;
+  /** LLM settings forwarded to the film tools panel for caption recommendations. */
+  aiProvider?: string;
+  aiBaseUrl?: string;
+  aiApiKey?: string;
+  aiModel?: string;
+  /** Caption output language ("auto" = keep the film's language). */
+  language?: string;
 }
 
 function getFriendlyErrorMessage(rawMsg: string): string {
@@ -275,6 +284,12 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   onDismissProgress,
   onRetryClip,
   videoDuration,
+  videoTitle,
+  aiProvider,
+  aiBaseUrl,
+  aiApiKey,
+  aiModel,
+  language,
 }) => {
   const { t } = useLanguage();
   // Directly reflect marked clips (supports selecting 0 clips)
@@ -993,6 +1008,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       normalized.push({
         title: nc.title,
         title_suggestion: nc.title,
+        caption_suggestion: nc.caption,
         start_time: start,
         end_time: end,
         virality_score: 0,
@@ -3575,6 +3591,12 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
               videoUrl={videoUrl}
               duration={videoDuration || 0}
               t={t.film}
+              title={videoTitle}
+              aiProvider={aiProvider}
+              aiBaseUrl={aiBaseUrl}
+              aiApiKey={aiApiKey}
+              aiModel={aiModel}
+              language={language}
               onAddClips={handleAddFilmClips}
               onUseBgm={handleUseFilmBgm}
               currentBgmName={bgmFileName}

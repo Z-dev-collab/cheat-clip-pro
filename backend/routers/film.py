@@ -31,6 +31,9 @@ from backend.schemas.film import (
     BgmDownloadRequest,
     BgmRecommendRequest,
     BgmRecommendResponse,
+    FilmCaption,
+    FilmCaptionsRequest,
+    FilmCaptionsResponse,
     FilmDownloadRequest,
     FilmPartsResponse,
     FilmSearchRequest,
@@ -38,6 +41,7 @@ from backend.schemas.film import (
     FilmSegmentsRequest,
     FilmSegmentsResponse,
 )
+from backend.services.caption_service import generate_part_captions
 from backend.services.film_service import (
     USER_AGENT,
     _download_url,
@@ -97,7 +101,7 @@ async def film_parts(identifier: str):
 
 @router.post("/api/film/segments", response_model=FilmSegmentsResponse)
 async def film_segments(request: FilmSegmentsRequest):
-    """Pecah film menjadi trailer + part berurutan (default 60s) hingga durasi tamat.
+    """Pecah film menjadi trailer + part berurutan (default 150s = 2 menit 30 detik) hingga durasi tamat.
 
     Bila `video_url` (file lokal di server) disertakan, potongan trailer dipilih
     dari jendela dengan energi audio tertinggi (adegan paling seru).
@@ -140,7 +144,7 @@ async def film_segments(request: FilmSegmentsRequest):
         plan = await asyncio.to_thread(
             plan_film_segments,
             duration,
-            float(request.part_seconds or 60.0),
+            float(request.part_seconds or 150.0),
             float(request.trailer_seconds or 60.0),
             bool(request.include_trailer),
             heatmap,
@@ -150,6 +154,52 @@ async def film_segments(request: FilmSegmentsRequest):
         raise HTTPException(status_code=400, detail=f"Gagal memecah film: {exc}")
 
     return FilmSegmentsResponse(**plan)
+
+
+@router.post("/api/film/captions", response_model=FilmCaptionsResponse)
+async def film_captions(request: FilmCaptionsRequest):
+    """Rekomendasi caption + hashtag per part (satu panggilan LLM untuk semua part).
+
+    Selalu mengembalikan satu caption untuk tiap part: hasil LLM bila tersedia,
+    atau template deterministik bila tidak ada model/API key — jadi alur film
+    tidak pernah gagal total.
+    """
+    title = (request.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Judul film tidak boleh kosong.")
+
+    parts = [
+        {"index": int(p.index), "label": (p.label or f"Part {i + 1}").strip()}
+        for i, p in enumerate(request.parts or [])
+    ]
+    if not parts:
+        raise HTTPException(status_code=400, detail="Daftar part kosong.")
+
+    language_name = ""
+    if (request.language or "").strip():
+        from backend.utils.languages import resolve_language_name
+        language_name = resolve_language_name(request.language) or request.language
+
+    try:
+        captions = await asyncio.to_thread(
+            generate_part_captions,
+            title,
+            parts,
+            language_name,
+            (request.provider or "gemini").strip(),
+            (request.base_url or "").strip(),
+            (request.api_key or "").strip(),
+            (request.model or "").strip(),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("film_captions error")
+        raise HTTPException(status_code=502, detail=f"Gagal membuat caption: {exc}")
+
+    return FilmCaptionsResponse(
+        title=title,
+        count=len(captions),
+        captions=[FilmCaption(**c) for c in captions],
+    )
 
 
 @router.post("/api/film/bgm-recommend", response_model=BgmRecommendResponse)

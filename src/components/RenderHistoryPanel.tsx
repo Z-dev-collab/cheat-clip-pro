@@ -161,20 +161,35 @@ const RenderHistoryPanel: React.FC<RenderHistoryPanelProps> = ({ refreshKey, onR
                     {completedClips.length > 0 ? (
                       <div className="recent-items-scroll">
                         {completedClips.map((c, i) => (
-                          <div key={i} className="recent-file-row">
-                            <span className="file-idx">#{c.clip_index != null ? c.clip_index + 1 : i + 1}</span>
-                            <span className="file-name" title={c.title || ''}>{c.title || `clip_${i + 1}`}</span>
-                            {c.duration != null && <span className="render-history-dur">{Math.round(c.duration)}s</span>}
-                            {c.download_url && (
-                              <a
-                                href={c.download_url}
-                                download
-                                className="quick-dl-btn"
-                                onClick={(e) => e.stopPropagation()}
-                                title={t.studio.renderHistoryDownloadClip}
-                              >
-                                ⬇️ MP4
-                              </a>
+                          <div key={i} className="recent-file-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '0.25rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <span className="file-idx">#{c.clip_index != null ? c.clip_index + 1 : i + 1}</span>
+                              <span className="file-name" title={c.title || ''}>{c.title || `clip_${i + 1}`}</span>
+                              {c.duration != null && <span className="render-history-dur">{Math.round(c.duration)}s</span>}
+                              {c.download_url && (
+                                <a
+                                  href={c.download_url}
+                                  download
+                                  className="quick-dl-btn"
+                                  onClick={(e) => e.stopPropagation()}
+                                  title={t.studio.renderHistoryDownloadClip}
+                                >
+                                  ⬇️ MP4
+                                </a>
+                              )}
+                              {c.caption && (
+                                <button
+                                  type="button"
+                                  className="quick-dl-btn"
+                                  onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(c.caption || ''); }}
+                                  title={t.studio.renderHistoryCopyCaption}
+                                >
+                                  📋 {t.studio.renderHistoryCaptionLabel}
+                                </button>
+                              )}
+                            </div>
+                            {c.caption && (
+                              <div className="render-history-caption" title={c.caption}>{c.caption}</div>
                             )}
                           </div>
                         ))}

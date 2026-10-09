@@ -183,6 +183,9 @@ export interface RenderClipStatus {
   download_url?: string;
   cover_url?: string;
   cover_filename?: string;
+  caption?: string;
+  caption_filename?: string;
+  caption_download_url?: string;
   error_message?: string;
   error?: string;
 }
@@ -202,6 +205,7 @@ export interface RenderHistoryClipRecord {
   clip_index?: number | null;
   title?: string | null;
   base_title?: string | null;
+  caption?: string | null;
   status?: string | null;
   download_url?: string | null;
   cover_url?: string | null;

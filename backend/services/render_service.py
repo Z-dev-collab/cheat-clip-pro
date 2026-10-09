@@ -222,6 +222,20 @@ async def render_single_batch_clip(
         clip_status["download_url"] = f"/api/download-rendered/{out_filename}"
         clip_status["output_path"] = out_path
 
+        # 3b. Caption sidecar — write the part's recommended caption next to the
+        # MP4 so the copy is ready to paste when uploading the part.
+        caption_text = (clip.get("caption") or clip.get("caption_suggestion") or "").strip()
+        if caption_text:
+            try:
+                caption_filename = f"clip_{idx+1}_{batch_id}.txt"
+                caption_path = EXPORTS_DIR / caption_filename
+                await asyncio.to_thread(caption_path.write_text, caption_text, "utf-8")
+                clip_status["caption"] = caption_text
+                clip_status["caption_filename"] = caption_filename
+                clip_status["caption_download_url"] = f"/api/download-rendered/{caption_filename}"
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"Caption sidecar write failed: {exc}")
+
         # 4. Auto Cover / Thumbnail (optional)
         if settings.cover_enabled:
             try:
