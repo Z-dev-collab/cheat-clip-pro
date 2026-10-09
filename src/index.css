@@ -4264,6 +4264,200 @@ label[for="manual-subtitle-file"]:hover {
   background: rgba(16, 185, 129, 0.15);
 }
 
+/* Render History Panel (studio left column) */
+.render-history-group {
+  margin-top: 0.85rem;
+}
+
+.render-history-desc {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  margin: 0 0 0.75rem 0;
+  line-height: 1.45;
+}
+
+.render-history-refresh-btn,
+.render-history-clear-btn {
+  background: rgba(168, 85, 247, 0.15);
+  border: 1px solid rgba(168, 85, 247, 0.4);
+  color: var(--primary, #a855f7);
+  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.render-history-refresh-btn:hover,
+.render-history-clear-btn:hover {
+  background: rgba(168, 85, 247, 0.28);
+}
+
+.render-history-clear-btn {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: #f87171;
+}
+
+.render-history-clear-btn:hover {
+  background: rgba(239, 68, 68, 0.25);
+}
+
+.render-history-refresh-btn:disabled,
+.render-history-clear-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.render-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.render-history-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 0.5rem 0.6rem;
+  transition: all 0.2s ease;
+}
+
+.render-history-card:hover {
+  border-color: rgba(168, 85, 247, 0.4);
+  background: rgba(168, 85, 247, 0.07);
+}
+
+.render-history-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.render-history-head-main {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.render-history-status-pill {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  padding: 0.1rem 0.45rem;
+  border-radius: 5px;
+  white-space: nowrap;
+}
+
+.render-history-merged-pill {
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  padding: 0.1rem 0.4rem;
+  border-radius: 5px;
+}
+
+.render-history-date {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.render-history-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
+.render-history-chevron {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+
+.render-history-delete-btn {
+  background: transparent;
+  border: none;
+  color: #f87171;
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0.1rem 0.25rem;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.render-history-delete-btn:hover {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+.render-history-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.3rem;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.render-history-details {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.render-history-dur {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  margin-left: 0.35rem;
+}
+
+.render-history-empty-detail {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  padding: 0.25rem 0;
+}
+
+.render-history-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+.render-history-action-btn {
+  background: rgba(168, 85, 247, 0.15);
+  border: 1px solid rgba(168, 85, 247, 0.4);
+  color: #c084fc;
+  border-radius: 6px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+
+.render-history-action-btn:hover {
+  background: rgba(168, 85, 247, 0.3);
+}
+
 /* Batch Queue Card in Preview Sidebar (under Render Specs & History) */
 .studio-batch-queue-card {
   background: rgba(13, 17, 23, 0.95);

@@ -3,6 +3,7 @@ import { useLanguage } from '../locales';
 import { resilientFetch } from '../utils/api';
 import SchedulePanel from './SchedulePanel';
 import MemeOverlayEditor from './MemeOverlayEditor';
+import RenderHistoryPanel from './RenderHistoryPanel';
 import FilmToolsPanel, { type NewFilmClip } from './FilmToolsPanel';
 import type {
   ViralClip,
@@ -23,6 +24,7 @@ import type {
   HardwareAccelInfo,
   FontItem,
   MemeOverlay,
+  RenderHistoryEntry,
 } from '../types';
 
 interface ClipStudioSectionProps {
@@ -278,6 +280,12 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   // Directly reflect marked clips (supports selecting 0 clips)
   const [selectedClips, setSelectedClips] = useState<ViralClip[]>(markedClips);
   const [previewClipIndex, setPreviewClipIndex] = useState<number>(0);
+  // Extra clips added from the Film Tools panel (not part of the analyzed
+  // result.clips). Kept locally so they can be previewed, checked and rendered.
+  const [filmClips, setFilmClips] = useState<ViralClip[]>([]);
+  // Bumped whenever a render batch finishes so the Render History panel refetches.
+  const [historyRefreshKey, setHistoryRefreshKey] = useState<number>(0);
+  const lastCompletedBatchRef = useRef<string | null>(null);
 
   const [aspectRatio, setAspectRatio] = useState<AspectRatioOption>(() => getSavedStudioPreferences().aspectRatio ?? DEFAULT_STUDIO_PREFS.aspectRatio);
   const [backgroundStyle, setBackgroundStyle] = useState<BackgroundStyle>(() => getSavedStudioPreferences().backgroundStyle ?? DEFAULT_STUDIO_PREFS.backgroundStyle);
@@ -485,24 +493,49 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const ambientVideoRef = useRef<HTMLVideoElement | null>(null);
   const trackingTimerRef = useRef<number | null>(null);
 
-  // Keep selectedClips in sync if markedClips updates from outside (including 0 clips)
+  // Merged clip list used for preview & selection: analyzed clips plus any
+  // film parts added locally from the Film Tools panel (which are not part of
+  // result.clips). This is what makes "Pratinjau" work for film parts too.
+  const previewClips = useMemo(() => {
+    const out = [...allClips];
+    for (const fc of filmClips) {
+      if (!out.some(c => c.start_time === fc.start_time && c.end_time === fc.end_time)) {
+        out.push(fc);
+      }
+    }
+    return out;
+  }, [allClips, filmClips]);
+
+  // Keep selectedClips in sync if markedClips updates from outside (including 0 clips),
+  // while preserving any locally added film clips.
   useEffect(() => {
-    setSelectedClips(markedClips);
-  }, [markedClips]);
+    setSelectedClips(prev => {
+      const extras = prev.filter(p =>
+        filmClips.some(fc => fc.start_time === p.start_time && fc.end_time === p.end_time)
+      );
+      const merged = [...markedClips];
+      for (const e of extras) {
+        if (!merged.some(m => m.start_time === e.start_time && m.end_time === e.end_time)) {
+          merged.push(e);
+        }
+      }
+      return merged;
+    });
+  }, [markedClips, filmClips]);
 
   // Sync active clip from external selection into preview
   useEffect(() => {
     if (activeClip) {
-      const idx = allClips.findIndex(
+      const idx = previewClips.findIndex(
         c => c.start_time === activeClip.start_time && c.end_time === activeClip.end_time
       );
       if (idx !== -1) {
         setPreviewClipIndex(idx);
       }
     }
-  }, [activeClip, allClips]);
+  }, [activeClip, previewClips]);
 
-  const currentPreviewClip = allClips[previewClipIndex] || allClips[0] || null;
+  const currentPreviewClip = previewClips[previewClipIndex] || previewClips[0] || null;
   const clipStart = currentPreviewClip ? currentPreviewClip.start_time : 0;
   const clipEnd = currentPreviewClip ? currentPreviewClip.end_time : 60;
   const clipDuration = Math.max(1, clipEnd - clipStart);
@@ -804,7 +837,10 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   };
 
   const toggleClip = (clip: ViralClip) => {
-    if (onToggleMarkClip) {
+    const isAnalyzedClip = allClips.some(
+      c => c.start_time === clip.start_time && c.end_time === clip.end_time
+    );
+    if (isAnalyzedClip && onToggleMarkClip) {
       onToggleMarkClip(clip);
     }
     const exists = selectedClips.some(
@@ -820,16 +856,14 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   };
 
   const handleToggleAllClips = () => {
-    const isAllSelected = allClips.length > 0 && selectedClips.length === allClips.length;
+    const isAllSelected = previewClips.length > 0 && previewClips.every(p =>
+      selectedClips.some(c => c.start_time === p.start_time && c.end_time === p.end_time)
+    );
     if (onToggleAllClips) {
       onToggleAllClips(!isAllSelected);
-    } else {
-      if (isAllSelected) {
-        setSelectedClips([]);
-      } else {
-        setSelectedClips([...allClips]);
-      }
     }
+    // Also select/deselect locally-added film clips (not covered by App state).
+    setSelectedClips(() => (isAllSelected ? [] : [...previewClips]));
   };
 
   const handleMoveClipUp = (index: number) => {
@@ -952,22 +986,37 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   // append to the current studio selection (deduped by time range).
   const handleAddFilmClips = (newClips: NewFilmClip[]) => {
     if (!newClips || newClips.length === 0) return;
+    const normalized: ViralClip[] = [];
+    for (const nc of newClips) {
+      const start = Math.max(0, nc.start_time);
+      const end = Math.max(start + 0.1, nc.end_time);
+      normalized.push({
+        title: nc.title,
+        title_suggestion: nc.title,
+        start_time: start,
+        end_time: end,
+        virality_score: 0,
+        key_quotes: [],
+        transcript: '',
+      });
+    }
+    // Register locally so these parts become previewable/selectable even though
+    // they are not part of the analyzed result.clips list.
+    setFilmClips(prev => {
+      const out = [...prev];
+      for (const nc of normalized) {
+        if (!out.some(c => c.start_time === nc.start_time && c.end_time === nc.end_time)) {
+          out.push(nc);
+        }
+      }
+      return out;
+    });
     setSelectedClips(prev => {
       const out = [...prev];
-      for (const nc of newClips) {
-        const start = Math.max(0, nc.start_time);
-        const end = Math.max(start + 0.1, nc.end_time);
-        const exists = out.some(c => c.start_time === start && c.end_time === end);
+      for (const nc of normalized) {
+        const exists = out.some(c => c.start_time === nc.start_time && c.end_time === nc.end_time);
         if (exists) continue;
-        out.push({
-          title: nc.title,
-          title_suggestion: nc.title,
-          start_time: start,
-          end_time: end,
-          virality_score: 0,
-          key_quotes: [],
-          transcript: '',
-        });
+        out.push(nc);
       }
       return out;
     });
@@ -980,6 +1029,36 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     setBgmAudioUrl(audioUrl || '');
     setBgmEnabled(true);
     setBgmStartOffset(0);
+  };
+
+  // When a batch finishes, refresh the Render History panel so the new entry
+  // appears without a manual reload.
+  useEffect(() => {
+    const status = batchProgress?.overall_status;
+    if (status === 'completed' || status === 'error') {
+      if (lastCompletedBatchRef.current !== batchProgress?.batch_id) {
+        lastCompletedBatchRef.current = batchProgress?.batch_id ?? null;
+        setHistoryRefreshKey(k => k + 1);
+      }
+    }
+  }, [batchProgress?.overall_status, batchProgress?.batch_id]);
+
+  // Restore a past render's clips back into the studio selection.
+  const handleRestoreHistoryClips = (entry: RenderHistoryEntry) => {
+    const restored: ViralClip[] = (entry.clips || [])
+      .filter(c => c.status === 'completed')
+      .map(c => ({
+        title: c.title || c.base_title || 'clip',
+        title_suggestion: c.title || c.base_title || 'clip',
+        start_time: c.start_time ?? 0,
+        end_time: c.end_time ?? 0,
+        virality_score: 0,
+        key_quotes: [],
+        transcript: '',
+      }));
+    if (restored.length === 0) return;
+    setSelectedClips(restored);
+    setPreviewClipIndex(0);
   };
 
   const toggleBgmPlayback = () => {
@@ -1675,7 +1754,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           </button>
 
           {/* Clip preview switcher */}
-          {allClips.length > 1 && (
+          {previewClips.length > 1 && (
             <div className="preview-clip-picker-bar">
               <span className="preview-picker-label">{t.studio.previewClip}</span>
               <select
@@ -1683,7 +1762,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 value={previewClipIndex}
                 onChange={e => setPreviewClipIndex(Number(e.target.value))}
               >
-                {allClips.map((clip, idx) => {
+                {previewClips.map((clip, idx) => {
                   const clipKey = `${clip.start_time}_${clip.end_time}`;
                   const custom = customClipTitles[clipKey];
                   const displayT = (custom !== undefined && custom.trim()) ? custom.trim() : (clip.title_suggestion || clip.title);
@@ -3645,7 +3724,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   const baseTitle = (custom !== undefined && custom.trim() !== '') ? custom : originalSuggestion;
                   const hasCustomTitle = custom !== undefined && custom.trim() !== '' && custom.trim() !== originalSuggestion;
                   const isCurrentActivePreview = currentPreviewClip && currentPreviewClip.start_time === clip.start_time && currentPreviewClip.end_time === clip.end_time;
-                  const originalIndex = allClips.findIndex(c => c.start_time === clip.start_time && c.end_time === clip.end_time);
+                  const originalIndex = previewClips.findIndex(c => c.start_time === clip.start_time && c.end_time === clip.end_time);
                   const clipDisplayNum = originalIndex !== -1 ? originalIndex + 1 : i + 1;
 
                   return (
@@ -3852,18 +3931,18 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           <div className="studio-card-group">
             <div className="group-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '0.5rem' }}>
               <span className="group-title">
-                {t.studio.batchChecklist(selectedClips.length, allClips.length)}
+                {t.studio.batchChecklist(selectedClips.length, previewClips.length)}
               </span>
-              {allClips.length > 0 && (
+              {previewClips.length > 0 && (
                 <button
                   type="button"
                   className="studio-checklist-toggle-btn"
                   onClick={handleToggleAllClips}
-                  title={selectedClips.length === allClips.length ? t.studio.unmarkAllClips : t.studio.markAllClips}
+                  title={selectedClips.length === previewClips.length ? t.studio.unmarkAllClips : t.studio.markAllClips}
                   style={{
-                    background: selectedClips.length === allClips.length ? 'rgba(239, 68, 68, 0.12)' : 'rgba(168, 85, 247, 0.15)',
-                    border: selectedClips.length === allClips.length ? '1px solid rgba(239, 68, 68, 0.35)' : '1px solid rgba(168, 85, 247, 0.4)',
-                    color: selectedClips.length === allClips.length ? '#f87171' : 'var(--primary, #a855f7)',
+                    background: selectedClips.length === previewClips.length ? 'rgba(239, 68, 68, 0.12)' : 'rgba(168, 85, 247, 0.15)',
+                    border: selectedClips.length === previewClips.length ? '1px solid rgba(239, 68, 68, 0.35)' : '1px solid rgba(168, 85, 247, 0.4)',
+                    color: selectedClips.length === previewClips.length ? '#f87171' : 'var(--primary, #a855f7)',
                     borderRadius: '6px',
                     padding: '0.22rem 0.55rem',
                     fontSize: '0.72rem',
@@ -3875,12 +3954,12 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     transition: 'all 0.2s ease',
                   }}
                 >
-                  {selectedClips.length === allClips.length ? t.studio.unmarkAllClips : t.studio.markAllClips}
+                  {selectedClips.length === previewClips.length ? t.studio.unmarkAllClips : t.studio.markAllClips}
                 </button>
               )}
             </div>
             <div className="batch-clips-list" style={{ maxHeight: '200px', overflowY: 'auto' }}>
-              {allClips.map((clip, i) => {
+              {previewClips.map((clip, i) => {
                 const isSelected = selectedClips.some(
                   c => c.start_time === clip.start_time && c.end_time === clip.end_time
                 );
@@ -3914,6 +3993,12 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
               })}
             </div>
           </div>
+
+          {/* 10. Render History — persisted list of finished render batches */}
+          <RenderHistoryPanel
+            refreshKey={historyRefreshKey}
+            onRestoreClips={handleRestoreHistoryClips}
+          />
         </div>
 
         {/* Right Column: Real Video Live Preview */}
@@ -4468,7 +4553,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 )}
                 <div className="history-info-item">
                   <span className="info-key">{t.studio.specQueue}</span>
-                  <span className="info-val">{t.studio.specQueueVal(selectedClips.length, allClips.length)}</span>
+                  <span className="info-val">{t.studio.specQueueVal(selectedClips.length, previewClips.length)}</span>
                 </div>
                 <div className="history-info-item">
                   <span className="info-key">{t.studio.specStatus}</span>

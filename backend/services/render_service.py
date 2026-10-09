@@ -20,6 +20,7 @@ from backend.config import (
     transcribe_clip_words,
 )
 from backend.schemas.render import RenderBatchRequest, RenderSettingsModel
+from backend.services.render_history_service import save_render_history
 
 RENDER_BATCHES: Dict[str, Dict[str, Any]] = {}
 BATCH_REQUESTS: Dict[str, RenderBatchRequest] = {}
@@ -318,6 +319,14 @@ def update_batch_summary_and_zip(batch_id: str, settings: RenderSettingsModel):
     else:
         batch["overall_status"] = "completed"
         batch["warning_message"] = None
+
+    # Persist a compact record of this batch into the render history (newest first).
+    # Only record batches that have finished (no clips still pending/running).
+    if not running_clips:
+        try:
+            save_render_history(batch_id, batch, settings)
+        except Exception as e:
+            logger.warning(f"Could not persist render history for batch {batch_id}: {e}")
 
 
 async def render_merged_batch_clips(

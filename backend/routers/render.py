@@ -28,6 +28,12 @@ from backend.services.render_service import (
     process_batch_rendering,
     process_batch_retry,
 )
+from backend.services.render_history_service import (
+    clear_render_history,
+    delete_render_history_entry,
+    get_render_history_entry,
+    list_render_history,
+)
 
 router = APIRouter(tags=["Render"])
 
@@ -68,7 +74,9 @@ async def start_batch_render(request: RenderBatchRequest, background_tasks: Back
             "clips": clips_status,
             "zip_url": None,
             "is_merged": True,
-            "merged_segments_count": len(request.clips)
+            "merged_segments_count": len(request.clips),
+            "video_id": request.video_id,
+            "video_url": request.video_url,
         }
     else:
         for idx, c in enumerate(request.clips):
@@ -88,7 +96,9 @@ async def start_batch_render(request: RenderBatchRequest, background_tasks: Back
             "overall_status": "running",
             "clips": clips_status,
             "zip_url": None,
-            "is_merged": False
+            "is_merged": False,
+            "video_id": request.video_id,
+            "video_url": request.video_url,
         }
 
     BATCH_REQUESTS[batch_id] = request
@@ -244,6 +254,34 @@ def download_batch_zip(batch_id: str):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Batch zip file not found")
     return FileResponse(file_path, media_type="application/zip", filename=safe_name)
+
+
+@router.get("/api/render-history")
+def get_render_history():
+    """Returns the persisted render history (newest first)."""
+    entries = list_render_history()
+    return {"status": "success", "count": len(entries), "entries": entries}
+
+
+@router.get("/api/render-history/{batch_id}")
+def get_render_history_detail(batch_id: str):
+    entry = get_render_history_entry(batch_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Render history entry not found")
+    return {"status": "success", "entry": entry}
+
+
+@router.delete("/api/render-history/{batch_id}")
+def delete_render_history(batch_id: str):
+    if not delete_render_history_entry(batch_id):
+        raise HTTPException(status_code=404, detail="Render history entry not found")
+    return {"status": "success", "deleted": batch_id}
+
+
+@router.delete("/api/render-history")
+def clear_render_history_all():
+    removed = clear_render_history()
+    return {"status": "success", "removed": removed}
 
 
 @router.get("/api/hardware-accel")

@@ -197,3 +197,35 @@ export interface BatchRenderProgress {
   warning_message?: string;
   clips: RenderClipStatus[];
 }
+
+export interface RenderHistoryClipRecord {
+  clip_index?: number | null;
+  title?: string | null;
+  base_title?: string | null;
+  status?: string | null;
+  download_url?: string | null;
+  cover_url?: string | null;
+  start_time?: number | null;
+  end_time?: number | null;
+  duration?: number | null;
+}
+
+export interface RenderHistoryEntry {
+  batch_id: string;
+  created_at: string;
+  overall_status?: string | null;
+  is_merged?: boolean;
+  total_clips?: number;
+  completed_count?: number;
+  failed_count?: number;
+  zip_url?: string | null;
+  video_id?: string | null;
+  video_url?: string | null;
+  settings?: {
+    aspect_ratio?: string | null;
+    caption_style?: string | null;
+    render_mode?: string | null;
+    cover_enabled?: boolean;
+  } | null;
+  clips?: RenderHistoryClipRecord[];
+}
