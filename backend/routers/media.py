@@ -355,6 +355,56 @@ def get_watermark_file(file_name: str):
     return FileResponse(file_path, media_type=media_type, filename=clean_name)
 
 
+@router.post("/api/upload-meme")
+async def upload_meme_sticker(file: UploadFile = File(...)):
+    """Upload a meme sticker image (PNG/JPG/WEBP/GIF) for the meme overlay editor."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+    ext = os.path.splitext(file.filename)[1].lower()
+    allowed = [".png", ".jpg", ".jpeg", ".webp", ".gif"]
+    if ext not in allowed:
+        raise HTTPException(status_code=400, detail=f"Unsupported image format. Allowed: {', '.join(allowed)}")
+
+    clean_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', file.filename)
+    unique_name = f"meme_{uuid.uuid4().hex[:8]}_{clean_name}"
+    save_path = UPLOADS_DIR / unique_name
+
+    try:
+        bytes_written = await _save_uploaded_file_chunked(file, save_path, MAX_IMAGE_UPLOAD_BYTES)
+        return {
+            "success": True,
+            "filename": file.filename,
+            "saved_name": unique_name,
+            "file_path": str(save_path),
+            "url": f"/api/meme-image/{unique_name}",
+            "size_bytes": bytes_written,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to upload meme sticker: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/meme-image/{file_name}")
+def get_meme_image(file_name: str):
+    clean_name = os.path.basename(file_name)
+    file_path = UPLOADS_DIR / clean_name
+    if not file_path.exists() or not _is_safe_path(file_path):
+        raise HTTPException(status_code=404, detail="Meme image not found")
+    if clean_name.endswith(".png"):
+        media_type = "image/png"
+    elif clean_name.endswith((".jpg", ".jpeg")):
+        media_type = "image/jpeg"
+    elif clean_name.endswith(".webp"):
+        media_type = "image/webp"
+    elif clean_name.endswith(".gif"):
+        media_type = "image/gif"
+    else:
+        media_type = "application/octet-stream"
+    return FileResponse(file_path, media_type=media_type, filename=clean_name)
+
+
 @router.get("/api/clip-frame")
 async def get_clip_frame(video_id: str, timestamp: float = 0.0, video_url: Optional[str] = None):
     """

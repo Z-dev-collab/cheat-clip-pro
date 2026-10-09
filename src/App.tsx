@@ -610,6 +610,25 @@ export default function App() {
             watermark_opacity: settings.watermarkOpacity !== undefined ? settings.watermarkOpacity : 80.0,
             watermark_x: settings.watermarkX !== undefined ? settings.watermarkX : 90.0,
             watermark_y: settings.watermarkY !== undefined ? settings.watermarkY : 8.0,
+            // Meme Overlays (interactive editor)
+            meme_enabled: settings.memeEnabled || false,
+            meme_overlays: (settings.memeEnabled && settings.memeOverlays && settings.memeOverlays.length > 0)
+              ? settings.memeOverlays.map((m) => ({
+                  type: m.type,
+                  text: m.text || null,
+                  image_path: m.imagePath || null,
+                  x: m.x,
+                  y: m.y,
+                  size: m.size,
+                  start_time: m.startTime,
+                  end_time: m.endTime !== undefined ? m.endTime : null,
+                  opacity: m.opacity,
+                  font_color: m.fontColor || 'white',
+                  outline_color: m.outlineColor || 'black',
+                  font: m.font || null,
+                  rotation: m.rotation || 0,
+                }))
+              : null,
             // Hardware Acceleration / Encoder
             hardware_accel: settings.hardwareAccel || 'auto',
             // Multi-Segment Merged Highlight Video
@@ -5484,6 +5503,7 @@ Transcript:
             setBatchProgress(null);
           }}
           onRetryClip={handleRetryBatchClip}
+          videoDuration={result?.duration || 0}
         />
       )}
 

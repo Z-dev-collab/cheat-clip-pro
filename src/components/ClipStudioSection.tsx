@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useLanguage } from '../locales';
 import { resilientFetch } from '../utils/api';
 import SchedulePanel from './SchedulePanel';
+import MemeOverlayEditor from './MemeOverlayEditor';
+import FilmToolsPanel, { type NewFilmClip } from './FilmToolsPanel';
 import type {
   ViralClip,
   RenderSettings,
@@ -20,6 +22,7 @@ import type {
   HardwareAccelOption,
   HardwareAccelInfo,
   FontItem,
+  MemeOverlay,
 } from '../types';
 
 interface ClipStudioSectionProps {
@@ -35,6 +38,8 @@ interface ClipStudioSectionProps {
   batchProgress?: BatchRenderProgress | null;
   onDismissProgress?: () => void;
   onRetryClip?: (clipIndex?: number) => void;
+  /** Full duration of the source video (seconds) — used by the film tools panel. */
+  videoDuration?: number;
 }
 
 function getFriendlyErrorMessage(rawMsg: string): string {
@@ -267,6 +272,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   batchProgress,
   onDismissProgress,
   onRetryClip,
+  videoDuration,
 }) => {
   const { t } = useLanguage();
   // Directly reflect marked clips (supports selecting 0 clips)
@@ -371,6 +377,10 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [isUploadingWatermark, setIsUploadingWatermark] = useState<boolean>(false);
   const [isWatermarkDragging, setIsWatermarkDragging] = useState<boolean>(false);
   const phoneContainerRef = useRef<HTMLDivElement | null>(null);
+
+  // Meme Overlays state (interactive editor)
+  const [memeEnabled, setMemeEnabled] = useState<boolean>(false);
+  const [memeOverlays, setMemeOverlays] = useState<MemeOverlay[]>([]);
 
   // Hardware acceleration / Video Encoder state
   const [hardwareAccel, setHardwareAccel] = useState<HardwareAccelOption>(() => getSavedStudioPreferences().hardwareAccel ?? DEFAULT_STUDIO_PREFS.hardwareAccel);
@@ -934,6 +944,41 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     setBgmFilePath('');
     setBgmAudioUrl('');
     setBgmDuration(0);
+    setBgmStartOffset(0);
+  };
+
+  // ── Film tools handlers ──────────────────────────────────────────────
+  // Turn generated trailer/parts (start/end) into renderable clips that
+  // append to the current studio selection (deduped by time range).
+  const handleAddFilmClips = (newClips: NewFilmClip[]) => {
+    if (!newClips || newClips.length === 0) return;
+    setSelectedClips(prev => {
+      const out = [...prev];
+      for (const nc of newClips) {
+        const start = Math.max(0, nc.start_time);
+        const end = Math.max(start + 0.1, nc.end_time);
+        const exists = out.some(c => c.start_time === start && c.end_time === end);
+        if (exists) continue;
+        out.push({
+          title: nc.title,
+          title_suggestion: nc.title,
+          start_time: start,
+          end_time: end,
+          virality_score: 0,
+          key_quotes: [],
+          transcript: '',
+        });
+      }
+      return out;
+    });
+  };
+
+  // Route a downloaded film soundtrack into the studio BGM slot.
+  const handleUseFilmBgm = (filePath: string, fileName: string, audioUrl: string) => {
+    setBgmFilePath(filePath);
+    setBgmFileName(fileName);
+    setBgmAudioUrl(audioUrl || '');
+    setBgmEnabled(true);
     setBgmStartOffset(0);
   };
 
@@ -1562,6 +1607,9 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       watermarkOpacity,
       watermarkX,
       watermarkY,
+      // Meme Overlays (interactive editor)
+      memeEnabled: !!(memeEnabled && memeOverlays.length > 0),
+      memeOverlays,
       // Original Voice Audio Boost
       originalAudioVolume,
       // Hardware Acceleration / Video Encoder
@@ -3401,6 +3449,59 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             )}
           </div>
 
+          {/* 8b. Meme Overlays (interactive editor) */}
+          <div className="studio-card-group" style={!memeEnabled ? { padding: '1rem 1.4rem' } : undefined}>
+            <div className="group-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: memeEnabled ? '0.85rem' : 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <span className="group-title" style={{ margin: 0 }}>{t.studio.memeTitle}</span>
+                <label style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer', margin: 0 }}>
+                  <input
+                    type="checkbox"
+                    checked={memeEnabled}
+                    onChange={e => setMemeEnabled(e.target.checked)}
+                    style={{ accentColor: 'var(--primary)', width: '15px', height: '15px', cursor: 'pointer', margin: 0 }}
+                  />
+                </label>
+                <span className={`status-pill ${memeEnabled ? 'pill-active' : ''}`} style={{ fontSize: '0.68rem', padding: '0.15rem 0.5rem', fontWeight: 500 }}>
+                  {memeEnabled ? t.studio.memeBadgeEnabled : t.studio.memeBadgeDisabled}
+                </span>
+              </div>
+            </div>
+
+            {memeEnabled && (
+              <div className="group-content" style={{ marginTop: '0.6rem' }}>
+                <p style={{ fontSize: '0.74rem', color: 'var(--text-muted)', margin: '0 0 0.75rem 0', lineHeight: 1.4, fontWeight: 400 }}>
+                  {t.studio.memeSubtitle}
+                </p>
+                <MemeOverlayEditor
+                  overlays={memeOverlays}
+                  onChange={setMemeOverlays}
+                  t={t.studio}
+                  clipDuration={clipDuration}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* 8c. Film Tools (trailer + 60s parts + background music) */}
+          <div className="studio-card-group">
+            <div className="group-header" style={{ marginBottom: '0.65rem' }}>
+              <span className="group-title">{t.film.panelTitle}</span>
+              <span className="group-badge" style={{ fontWeight: 500 }}>🎬</span>
+            </div>
+            <p style={{ fontSize: '0.74rem', color: 'var(--text-muted)', margin: '0 0 0.85rem 0', lineHeight: 1.4, fontWeight: 400 }}>
+              {t.film.panelHint}
+            </p>
+            <FilmToolsPanel
+              videoUrl={videoUrl}
+              duration={videoDuration || 0}
+              t={t.film}
+              onAddClips={handleAddFilmClips}
+              onUseBgm={handleUseFilmBgm}
+              currentBgmName={bgmFileName}
+            />
+          </div>
+
           {/* 8. Hardware Acceleration & Video Encoder */}
           <div className="studio-card-group">
             <div className="group-header" style={{ marginBottom: '0.65rem' }}>
@@ -4172,6 +4273,59 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     ) : null}
                   </div>
                 )}
+
+                {/* Real-time Meme Overlay Preview (interactive editor) */}
+                {memeEnabled && memeOverlays.map((m) => {
+                  const commonStyle: React.CSSProperties = {
+                    left: `${m.x}%`,
+                    top: `${m.y}%`,
+                    transform: `translate(-50%, -50%)${m.type === 'image' && m.rotation ? ` rotate(${m.rotation}deg)` : ''}`,
+                    opacity: m.opacity,
+                    zIndex: 26,
+                    pointerEvents: 'none',
+                    userSelect: 'none',
+                  };
+                  if (m.type === 'image' && m.imageUrl) {
+                    return (
+                      <div key={m.id} className="wireframe-meme-overlay" style={commonStyle}>
+                        <img
+                          src={m.imageUrl}
+                          alt="Meme"
+                          draggable={false}
+                          style={{
+                            width: `${Math.round((phoneWidth * m.size) / 100)}px`,
+                            height: 'auto',
+                            objectFit: 'contain',
+                            display: 'block',
+                            pointerEvents: 'none',
+                          }}
+                        />
+                      </div>
+                    );
+                  }
+                  if (m.type === 'text' && m.text?.trim()) {
+                    return (
+                      <div key={m.id} className="wireframe-meme-overlay" style={commonStyle}>
+                        <span
+                          className="meme-text-badge"
+                          style={{
+                            fontSize: `${Math.max(8, Math.round((m.size / 100) * phoneHeight))}px`,
+                            color: m.fontColor || 'white',
+                            WebkitTextStroke: `2px ${m.outlineColor || 'black'}`,
+                            fontWeight: 900,
+                            whiteSpace: 'pre-wrap',
+                            textAlign: 'center',
+                            display: 'inline-block',
+                            pointerEvents: 'none',
+                          }}
+                        >
+                          {m.text}
+                        </span>
+                      </div>
+                    );
+                  }
+                  return null;
+                })}
               </div>
             </div>
 

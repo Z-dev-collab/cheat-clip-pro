@@ -1,6 +1,23 @@
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 
+class MemeOverlayModel(BaseModel):
+    """A single meme overlay (sticker/text) placed on the clip canvas."""
+    type: str = "text"                 # "text" | "image"
+    text: Optional[str] = None         # for type=text
+    image_path: Optional[str] = None   # for type=image (server path or uploads filename)
+    x: float = 50.0                    # center X anchor (percent of canvas width)
+    y: float = 50.0                    # center Y anchor (percent of canvas height)
+    size: float = 40.0                 # text: font size % of width; image: width % of canvas
+    start_time: Optional[float] = 0.0  # seconds into the clip
+    end_time: Optional[float] = None   # seconds into the clip (None = until end)
+    opacity: float = 1.0               # 0.0 - 1.0
+    font_color: Optional[str] = "white"
+    outline_color: Optional[str] = "black"
+    font: Optional[str] = None
+    rotation: Optional[float] = 0.0    # degrees (image only)
+
+
 class RenderSettingsModel(BaseModel):
     aspect_ratio: str = "9:16"
     background_style: str = "black"
@@ -48,6 +65,9 @@ class RenderSettingsModel(BaseModel):
     watermark_opacity: Optional[float] = 80.0
     watermark_x: Optional[float] = 90.0
     watermark_y: Optional[float] = 8.0
+    # Meme Overlays (interactive editor)
+    meme_enabled: Optional[bool] = False
+    meme_overlays: Optional[List[MemeOverlayModel]] = None
     hardware_accel: Optional[str] = "auto"
     # Multi-Segment Merged Highlight Video
     render_mode: Optional[str] = "separate"  # "separate" | "merged"

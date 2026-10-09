@@ -28,16 +28,24 @@ from fastapi.responses import Response, StreamingResponse
 
 from backend.config import logger
 from backend.schemas.film import (
+    BgmDownloadRequest,
+    BgmRecommendRequest,
+    BgmRecommendResponse,
     FilmDownloadRequest,
     FilmPartsResponse,
     FilmSearchRequest,
     FilmSearchResponse,
+    FilmSegmentsRequest,
+    FilmSegmentsResponse,
 )
 from backend.services.film_service import (
     USER_AGENT,
     _download_url,
+    download_archive_audio,
     download_archive_file,
     get_item_parts,
+    plan_film_segments,
+    recommend_bgm,
     search_archive,
 )
 
@@ -85,6 +93,157 @@ async def film_parts(identifier: str):
         logger.exception("film_parts error")
         raise HTTPException(status_code=502, detail=f"Gagal mengambil part film: {exc}")
     return FilmPartsResponse(**data)
+
+
+@router.post("/api/film/segments", response_model=FilmSegmentsResponse)
+async def film_segments(request: FilmSegmentsRequest):
+    """Pecah film menjadi trailer + part berurutan (default 60s) hingga durasi tamat.
+
+    Bila `video_url` (file lokal di server) disertakan, potongan trailer dipilih
+    dari jendela dengan energi audio tertinggi (adegan paling seru).
+    """
+    duration = float(request.duration or 0.0)
+
+    # Best-effort: enrich with a local audio-energy heatmap so the trailer is
+    # chosen from the most engaging window instead of always starting at 0.
+    heatmap = None
+    video_url = (request.video_url or "").strip()
+    if video_url and duration > 0:
+        try:
+            from backend.video_engine import (
+                compute_audio_energy_heatmap,
+                get_video_file_metadata,
+            )
+            from backend.config import UPLOADS_DIR, TEMP_DIR, EXPORTS_DIR
+            import os as _os
+
+            base = _os.path.basename(video_url.split("?")[0])
+            local = None
+            for d in (UPLOADS_DIR, TEMP_DIR, EXPORTS_DIR):
+                cand = d / base
+                if cand.exists():
+                    local = cand
+                    break
+            if local is not None:
+                meta = await asyncio.to_thread(get_video_file_metadata, local)
+                real_dur = float(meta.get("duration") or 0.0)
+                if real_dur > 0:
+                    duration = real_dur
+                heatmap = await asyncio.to_thread(
+                    compute_audio_energy_heatmap, local, duration, 100
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"film_segments heatmap skipped: {exc}")
+            heatmap = None
+
+    try:
+        plan = await asyncio.to_thread(
+            plan_film_segments,
+            duration,
+            float(request.part_seconds or 60.0),
+            float(request.trailer_seconds or 60.0),
+            bool(request.include_trailer),
+            heatmap,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("film_segments error")
+        raise HTTPException(status_code=400, detail=f"Gagal memecah film: {exc}")
+
+    return FilmSegmentsResponse(**plan)
+
+
+@router.post("/api/film/bgm-recommend", response_model=BgmRecommendResponse)
+async def film_bgm_recommend(request: BgmRecommendRequest):
+    """Rekomendasi latar musik legal (Archive.org) berdasarkan mood/suasana."""
+    try:
+        data = await asyncio.to_thread(
+            recommend_bgm,
+            request.mood or "epic",
+            request.query or "",
+            max(1, min(12, int(request.limit or 6))),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("film_bgm_recommend error")
+        raise HTTPException(status_code=502, detail=f"Gagal mengambil rekomendasi musik: {exc}")
+    return BgmRecommendResponse(**data)
+
+
+@router.post("/api/film/bgm-download")
+async def film_bgm_download(request: BgmDownloadRequest):
+    """Unduh track musik terpilih (SSE progress); selesai -> path + URL audio lokal."""
+    if not (request.identifier or "").strip() or not (request.file or "").strip():
+        raise HTTPException(status_code=400, detail="Identifier / file audio kosong.")
+
+    async def stream():
+        loop = asyncio.get_running_loop()
+        q: asyncio.Queue = asyncio.Queue()
+
+        def progress(stage: str, detail: str, step_pct: int = 30):
+            loop.call_soon_threadsafe(q.put_nowait, {
+                "step": 1,
+                "step_progress": step_pct,
+                "overall_progress": min(95, max(2, step_pct)),
+                "stage": stage,
+                "detail": detail,
+                "message": detail,
+            })
+
+        yield _sse({
+            "step": 1,
+            "step_progress": 2,
+            "overall_progress": 2,
+            "stage": "Memulai",
+            "detail": "Menyiapkan unduhan musik dari Archive.org...",
+            "message": "Menyiapkan unduhan musik dari Archive.org...",
+        })
+
+        try:
+            task = asyncio.create_task(asyncio.to_thread(
+                download_archive_audio,
+                request.identifier,
+                request.file,
+                request.title_hint,
+                progress,
+            ))
+            while not task.done():
+                try:
+                    evt = await asyncio.wait_for(q.get(), timeout=0.25)
+                    yield _sse(evt)
+                except asyncio.TimeoutError:
+                    pass
+            while not q.empty():
+                yield _sse(q.get_nowait())
+            path: Path = await task
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"film_bgm_download failed: {exc}")
+            yield _sse({"error": f"Gagal mengunduh musik: {exc}", "status": 400})
+            return
+
+        result = {
+            "saved_name": path.name,
+            "file_path": str(path),
+            "audio_url": f"/api/audio/{quote(path.name)}",
+            "title": request.title_hint or path.stem,
+            "size_bytes": path.stat().st_size,
+        }
+        yield _sse({
+            "step": 1,
+            "step_progress": 100,
+            "overall_progress": 100,
+            "stage": "Unduhan Selesai",
+            "detail": f"Musik siap dipakai: {path.name}",
+            "message": f"Musik siap dipakai: {path.name}",
+            "done": True,
+            "result": result,
+        })
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/api/film/preview/{identifier}/{file_name:path}")

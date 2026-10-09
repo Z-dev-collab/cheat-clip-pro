@@ -4693,6 +4693,39 @@ label[for="manual-subtitle-file"]:hover {
   backdrop-filter: blur(4px);
 }
 
+/* Meme overlay preview (interactive editor) */
+.wireframe-meme-overlay {
+  position: absolute;
+  z-index: 26;
+  transition: opacity 0.15s ease;
+  user-select: none;
+  pointer-events: none;
+}
+
+.wireframe-meme-overlay img {
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.8));
+  user-select: none;
+}
+
+.wireframe-meme-overlay .meme-text-badge {
+  font-family: 'Outfit', sans-serif;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  line-height: 1.1;
+  user-select: none;
+  word-break: break-word;
+  max-width: 90%;
+}
+
+/* Meme overlay editor panel */
+.meme-overlay-item {
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.meme-overlay-item:hover {
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
 /* ==========================================================================
    Hook Prefix / Suffix, Subtitle Visibility, and Filename Option Styles
    ========================================================================== */

@@ -54,3 +54,73 @@ class FilmDownloadRequest(BaseModel):
     identifier: str = Field(..., description="Identifier item Archive.org")
     file: str = Field(..., description="Nama file video (part) yang dipilih")
     title_hint: str = Field("", description="Judul untuk penamaan file")
+
+
+# ── Film segmentation (trailer + 60s parts) ──────────────────────────────────
+
+class FilmSegmentsRequest(BaseModel):
+    duration: float = Field(..., description="Durasi film (detik)")
+    part_seconds: float = Field(60.0, description="Panjang tiap part (detik), default 60")
+    trailer_seconds: float = Field(60.0, description="Panjang trailer (detik), default 60")
+    include_trailer: bool = Field(True, description="Sertakan potongan trailer")
+    video_url: Optional[str] = Field(None, description="URL/path video lokal untuk analisis heatmap (opsional)")
+
+
+class FilmSegment(BaseModel):
+    index: int = 0
+    label: str = ""
+    start_time: float = 0.0
+    end_time: float = 0.0
+    duration: float = 0.0
+    is_trailer: bool = False
+
+
+class FilmSegmentsResponse(BaseModel):
+    duration: float = 0.0
+    part_seconds: float = 60.0
+    part_count: int = 0
+    total_parts_duration: float = 0.0
+    trailer: Optional[FilmSegment] = None
+    parts: List[FilmSegment] = Field(default_factory=list)
+
+
+# ── Background-music recommendation ─────────────────────────────────────────
+
+class BgmRecommendRequest(BaseModel):
+    mood: str = Field("epic", description="Mood/suasana (epic, action, tense, sad, calm, happy, romantic, mysterious)")
+    query: Optional[str] = Field("", description="Kata kunci bebas (opsional, menimpa mood)")
+    limit: int = Field(6, description="Jumlah rekomendasi")
+
+
+class BgmTrack(BaseModel):
+    identifier: str = ""
+    title: str = ""
+    creator: Optional[str] = ""
+    year: Optional[str] = ""
+    licenseurl: Optional[str] = ""
+    downloads: Optional[object] = None
+    size: Optional[str] = ""
+    size_bytes: Optional[int] = 0
+    length: Optional[float] = 0.0
+    duration: Optional[str] = ""
+    audio_file: Optional[str] = ""
+    audio_format: Optional[str] = ""
+    download_url: Optional[str] = ""
+    preview_url: Optional[str] = ""
+    poster: Optional[str] = ""
+    url: Optional[str] = ""
+    mood: Optional[str] = ""
+
+
+class BgmRecommendResponse(BaseModel):
+    mood: str = "epic"
+    query: str = ""
+    count: int = 0
+    source: str = "archive.org"
+    tracks: List[BgmTrack] = Field(default_factory=list)
+
+
+class BgmDownloadRequest(BaseModel):
+    identifier: str = Field(..., description="Identifier item audio Archive.org")
+    file: str = Field(..., description="Nama file audio yang dipilih")
+    title_hint: str = Field("", description="Judul untuk penamaan file")

@@ -3211,6 +3211,64 @@ def check_has_audio(video_path: str) -> bool:
         return True
 
 
+def resolve_font_file(font_name: Optional[str] = None) -> Optional[str]:
+    """Resolve a font family name to an absolute .ttf/.otf path for ffmpeg drawtext.
+
+    Looks in backend/fonts first (project fonts), then common Windows/Linux font
+    directories. Returns None when nothing matches, so drawtext falls back to its
+    built-in default rather than failing the whole render.
+    """
+    candidates: List[str] = []
+    if font_name:
+        stem = str(font_name).strip()
+        for ext in (".ttf", ".otf", ""):
+            candidates.append(str(FONTS_DIR / f"{stem}{ext}"))
+    for fallback in ("Outfit.ttf", "Montserrat.ttf", "Anton.ttf", "Bebas Neue.ttf", "Inter.ttf"):
+        candidates.append(str(FONTS_DIR / fallback))
+    if os.name == "nt":
+        win = os.environ.get("WINDIR", r"C:\Windows")
+        for name in ("arialbd.ttf", "ariblk.ttf", "arial.ttf", "seguisb.ttf", "segoeui.ttf"):
+            candidates.append(os.path.join(win, "Fonts", name))
+    else:
+        for name in (
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ):
+            candidates.append(name)
+    for c in candidates:
+        if c and os.path.exists(c):
+            return c
+    return None
+
+
+def _escape_filter_path(path: str) -> str:
+    """Escape a filesystem path for use inside an ffmpeg filtergraph option.
+
+    On Windows the drive-letter colon (``C:\\...``) terminates the option value,
+    so it must be backslash-escaped; backslashes are also normalised to forward
+    slashes which ffmpeg accepts on every platform.
+    """
+    p = str(path).replace("\\", "/")
+    p = p.replace(":", "\\:")
+    return p
+
+
+def _hex_to_ffmpeg_color(value: Optional[str], default: str = "white") -> str:
+    """Convert #RRGGBB / #RRGGBBAA to ffmpeg 0xRRGGBB[@alpha] form."""
+    if not value:
+        return default
+    v = str(value).strip()
+    if v.startswith("#"):
+        v = v[1:]
+    if len(v) == 8:
+        return f"0x{v[:6]}@{int(v[6:8], 16) / 255.0:.3f}"
+    if len(v) == 6:
+        return f"0x{v}"
+    if len(v) == 3:
+        return f"0x{v[0]*2}{v[1]*2}{v[2]*2}"
+    return default
+
+
 def render_clip_to_mp4(
     video_path: str,
     output_mp4_path: str,
@@ -3248,7 +3306,9 @@ def render_clip_to_mp4(
     original_audio_volume: float = 1.0,
     # Hardware acceleration selection ('auto', 'nvenc', 'amf', 'qsv', 'cpu')
     hardware_accel: Optional[str] = "auto",
-    title_y_percent: Optional[float] = None
+    title_y_percent: Optional[float] = None,
+    # Meme overlays (interactive editor): list of {type, text/image_path, x, y, size, start_time, end_time, ...}
+    meme_overlays: Optional[List[Dict[str, Any]]] = None
 ) -> str:
     """
     Renders the final 1080x1920 short-form video with layout, aspect ratio, titles, subtitles,
@@ -3359,6 +3419,88 @@ def render_clip_to_mp4(
             )
             filter_chains.append(drawtext_cmd)
             out_video_map = "[v_watermarked]"
+
+    # 2b. Apply Meme Overlays (text stickers / image stickers) — interactive editor
+    if meme_overlays:
+        canvas_w = 1920 if aspect_ratio == "16:9_landscape" else 1080
+        canvas_h = 1080 if aspect_ratio == "16:9_landscape" else 1920
+        meme_count = 0
+        for idx, ov in enumerate(meme_overlays):
+            if not isinstance(ov, dict):
+                continue
+            try:
+                ov_type = str(ov.get("type") or "text").lower()
+                ov_x = max(-1.0, min(2.0, float(ov.get("x", 50.0)) / 100.0))
+                ov_y = max(-1.0, min(2.0, float(ov.get("y", 50.0)) / 100.0))
+                ov_size = float(ov.get("size", 40.0))
+                ov_opacity = max(0.05, min(1.0, float(ov.get("opacity", 1.0))))
+                ov_start = max(0.0, float(ov.get("start_time") or 0.0))
+                ov_end_raw = ov.get("end_time")
+                ov_end = float(ov_end_raw) if ov_end_raw is not None else dur
+                ov_end = max(ov_start + 0.05, min(dur, ov_end))
+                enable_expr = f":enable='between(t,{ov_start:.2f},{ov_end:.2f})'"
+
+                if ov_type == "image":
+                    img_path = str(ov.get("image_path") or "").strip()
+                    if not img_path:
+                        continue
+                    # Resolve a bare filename against UPLOADS_DIR, else use as-is.
+                    if not os.path.isabs(img_path):
+                        cand = UPLOADS_DIR / os.path.basename(img_path)
+                        img_path = str(cand) if cand.exists() else img_path
+                    if not os.path.exists(img_path):
+                        logger.warning(f"Meme image not found, skipping: {img_path}")
+                        continue
+
+                    m_idx = input_idx_counter
+                    input_idx_counter += 1
+                    extra_input_args.extend(["-i", img_path])
+
+                    m_w = max(16, min(5400, int(canvas_w * (ov_size / 100.0))))
+                    rotation = float(ov.get("rotation") or 0.0)
+                    prep = f"[{m_idx}:v]format=rgba,colorchannelmixer=aa={ov_opacity:.2f},scale={m_w}:-1"
+                    if abs(rotation) > 0.01:
+                        prep += f",rotate={rotation}*PI/180:c=none:ow=rotw(iw):oh=roth(ih)"
+                    prep += f"[meme_proc_{idx}]"
+                    filter_chains.append(prep)
+                    filter_chains.append(
+                        f"{out_video_map}[meme_proc_{idx}]overlay="
+                        f"x='main_w*{ov_x:.4f}-overlay_w/2':"
+                        f"y='main_h*{ov_y:.4f}-overlay_h/2':eval=init{enable_expr}[v_meme_{idx}]"
+                    )
+                    out_video_map = f"[v_meme_{idx}]"
+                    meme_count += 1
+
+                else:  # text sticker
+                    raw_text = str(ov.get("text") or "").strip()
+                    if not raw_text:
+                        continue
+                    clean_text = (
+                        raw_text.replace("\\", "\\\\").replace("'", "")
+                        .replace(":", "\\:").replace("%", "\\%").strip()
+                    )
+                    if not clean_text:
+                        continue
+                    font_px = max(10, min(900, int(canvas_h * (ov_size / 100.0))))
+                    font_color = _hex_to_ffmpeg_color(ov.get("font_color"), "white")
+                    outline_color = _hex_to_ffmpeg_color(ov.get("outline_color"), "black")
+                    border_w = max(1, int(font_px * 0.06))
+                    font_path = resolve_font_file(ov.get("font"))
+                    font_arg = f":fontfile='{_escape_filter_path(font_path)}'" if font_path else ""
+                    filter_chains.append(
+                        f"{out_video_map}drawtext=text='{clean_text}':fontsize={font_px}"
+                        f"{font_arg}:"
+                        f"fontcolor={font_color}@{ov_opacity:.2f}:"
+                        f"borderw={border_w}:bordercolor={outline_color}@{ov_opacity:.2f}:"
+                        f"x='w*{ov_x:.4f}-text_w/2':y='h*{ov_y:.4f}-text_h/2'"
+                        f"{enable_expr}[v_meme_{idx}]"
+                    )
+                    out_video_map = f"[v_meme_{idx}]"
+                    meme_count += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"Skipping invalid meme overlay #{idx}: {exc}")
+        if meme_count:
+            logger.info(f"Applied {meme_count} meme overlay(s).")
 
     # 2. Audio Processing (Original Audio with Boost, BGM with start offset, and Hook SFX at frame 0)
     audio_inputs_to_mix = []

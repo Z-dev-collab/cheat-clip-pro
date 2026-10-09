@@ -206,7 +206,11 @@ async def render_single_batch_clip(
             hook_sfx_volume=float((settings.hook_sfx_volume if settings.hook_sfx_volume is not None else 100.0) / 100.0),
             original_audio_volume=float((settings.original_audio_volume if settings.original_audio_volume is not None else 100.0) / 100.0),
             hardware_accel=settings.hardware_accel or "auto",
-            title_y_percent=settings.title_y_percent
+            title_y_percent=settings.title_y_percent,
+            meme_overlays=(
+                [m.model_dump() for m in settings.meme_overlays]
+                if (settings.meme_enabled and settings.meme_overlays) else None
+            )
         )
 
         if not os.path.exists(out_path) or not is_valid_mp4(out_path):
@@ -520,7 +524,11 @@ async def render_merged_batch_clips(
             hook_sfx_volume=float((settings.hook_sfx_volume if settings.hook_sfx_volume is not None else 100.0) / 100.0),
             original_audio_volume=float((settings.original_audio_volume if settings.original_audio_volume is not None else 100.0) / 100.0),
             hardware_accel=settings.hardware_accel or "auto",
-            title_y_percent=settings.title_y_percent
+            title_y_percent=settings.title_y_percent,
+            meme_overlays=(
+                [m.model_dump() for m in settings.meme_overlays]
+                if (settings.meme_enabled and settings.meme_overlays) else None
+            )
         )
 
         if not os.path.exists(out_path) or not is_valid_mp4(out_path):

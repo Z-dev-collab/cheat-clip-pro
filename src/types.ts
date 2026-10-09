@@ -93,6 +93,24 @@ export interface HardwareAccelInfo {
   }>;
 }
 
+export interface MemeOverlay {
+  id: string;
+  type: 'text' | 'image';
+  text?: string;
+  imagePath?: string;
+  imageUrl?: string;
+  x: number;        // 0 to 100 (% of canvas width, center anchor)
+  y: number;        // 0 to 100 (% of canvas height, center anchor)
+  size: number;     // text: font size % of height; image: width % of canvas
+  startTime: number; // seconds into the clip
+  endTime?: number | null; // seconds into the clip (null = until end)
+  opacity: number;  // 0 to 1
+  fontColor?: string;
+  outlineColor?: string;
+  font?: string;
+  rotation?: number; // degrees (image only)
+}
+
 export interface RenderSettings {
   aspectRatio: AspectRatioOption;
   backgroundStyle: BackgroundStyle;
@@ -144,6 +162,9 @@ export interface RenderSettings {
   watermarkOpacity?: number; // 10 to 100%
   watermarkX?: number; // 0 to 100%
   watermarkY?: number; // 0 to 100%
+  // Meme Overlays (interactive editor)
+  memeEnabled?: boolean;
+  memeOverlays?: MemeOverlay[];
   // Hardware Acceleration / Video Encoder
   hardwareAccel?: HardwareAccelOption;
   // Multi-Segment Merged Highlight Video
