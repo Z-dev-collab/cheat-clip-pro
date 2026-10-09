@@ -586,11 +586,43 @@ async def analyze_video(request: AnalyzeRequest):
                                 {"text": "This works locally on any uploaded file.",     "start": 11.0, "duration": 3.0},
                             ]
                         else:
+                            # Music-only / no-speech video (e.g. a TikTok clip whose
+                            # audio is just background music): Whisper finds zero
+                            # words, but the clip is still perfectly usable. Instead
+                            # of dead-ending, synthesize a timeline from the acoustic
+                            # heatmap so downstream clip selection keeps working.
+                            synth_lines = []
+                            _win = 5.0
+                            _st = 0.0
+                            _total = duration if duration > 0 else 60.0
+                            while _st < _total:
+                                _et = min(_total, _st + _win)
+                                _vals = [
+                                    float(pt.get("value", 0.0))
+                                    for pt in (heatmap or [])
+                                    if max(float(pt.get("start_time", 0.0)), _st)
+                                    < min(float(pt.get("end_time", 0.0)), _et)
+                                ]
+                                _eng = (sum(_vals) / len(_vals)) if _vals else 0.3
+                                synth_lines.append({
+                                    "text": "",
+                                    "start": round(_st, 2),
+                                    "duration": round(_et - _st, 2),
+                                    "engagement": round(_eng, 3),
+                                })
+                                _st = _et
+                            transcript_lines = synth_lines
                             yield _sse({
-                                "error": "No spoken words were detected in this video file. Ensure the video contains clear audible speech.",
-                                "status": 400
+                                "step": 3,
+                                "step_progress": 100,
+                                "overall_progress": 70,
+                                "stage": "Music-Only Video",
+                                "detail": (
+                                    "No spoken words detected — switching to acoustic-timeline "
+                                    f"analysis ({len(synth_lines)} segments)."
+                                ),
+                                "message": "No dialogue detected — using the music/audio timeline to find highlights."
                             })
-                            return
 
                     yield _sse({
                         "step": 3,

@@ -182,29 +182,38 @@ class _FasterWhisperAdapter:
             decoded = self._decode_audio_via_ffmpeg(audio)
             if decoded is not None:
                 audio_input = decoded
-        seg_iter, info = self._model.transcribe(
-            audio_input,
-            word_timestamps=bool(word_timestamps),
-            initial_prompt=initial_prompt,
-            vad_filter=True,
-            beam_size=5,
-            condition_on_previous_text=False,
-        )
-        segments = []
-        for seg in seg_iter:
-            words = []
-            for w in (getattr(seg, "words", None) or []):
-                words.append({
-                    "word": w.word,
-                    "start": float(w.start or 0.0),
-                    "end": float(w.end or 0.0),
+        def _collect(use_vad: bool):
+            seg_iter, info = self._model.transcribe(
+                audio_input,
+                word_timestamps=bool(word_timestamps),
+                initial_prompt=initial_prompt,
+                vad_filter=use_vad,
+                beam_size=5,
+                condition_on_previous_text=False,
+            )
+            segs = []
+            for seg in seg_iter:
+                words = []
+                for w in (getattr(seg, "words", None) or []):
+                    words.append({
+                        "word": w.word,
+                        "start": float(w.start or 0.0),
+                        "end": float(w.end or 0.0),
+                    })
+                segs.append({
+                    "start": float(seg.start or 0.0),
+                    "end": float(seg.end or 0.0),
+                    "text": seg.text or "",
+                    "words": words,
                 })
-            segments.append({
-                "start": float(seg.start or 0.0),
-                "end": float(seg.end or 0.0),
-                "text": seg.text or "",
-                "words": words,
-            })
+            return segs, info
+
+        segments, info = _collect(True)
+        if not segments:
+            # Voice-activity detection drops every segment when loud music or
+            # sound effects mask the voice — very common on TikTok clips.
+            # Retry once without VAD so we still capture any speech present.
+            segments, info = _collect(False)
         return {"segments": segments, "language": getattr(info, "language", "")}
 
 
