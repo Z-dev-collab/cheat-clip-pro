@@ -83,7 +83,6 @@ export default function FilmToolsPanel({
   currentBgmName,
 }: Props) {
   const [partSeconds, setPartSeconds] = useState<number>(60);
-  const [includeTrailer, setIncludeTrailer] = useState<boolean>(true);
   const [planning, setPlanning] = useState<boolean>(false);
   const [plan, setPlan] = useState<FilmSegmentsPlan | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
@@ -112,7 +111,7 @@ export default function FilmToolsPanel({
           duration,
           part_seconds: partSeconds,
           trailer_seconds: partSeconds,
-          include_trailer: includeTrailer,
+          include_trailer: false,
           video_url: videoUrl || null,
         }),
       });
@@ -122,18 +121,21 @@ export default function FilmToolsPanel({
       }
       const data: FilmSegmentsPlan = await res.json();
       setPlan(data);
+      // Auto-add every consecutive part straight away so the whole film can be
+      // rendered as an ordered batch of clips without a click per part.
+      if (data.parts?.length) {
+        onAddClips(data.parts.map((p) => ({
+          title: p.label || `Part ${p.index + 1}`,
+          start_time: p.start_time,
+          end_time: p.end_time,
+        })));
+      }
     } catch (e: any) {
       setPlanError(e.message || t.planFailed);
     } finally {
       setPlanning(false);
     }
-  }, [duration, partSeconds, includeTrailer, videoUrl, t.planFailed]);
-
-  const addTrailer = useCallback(() => {
-    if (!plan?.trailer) return;
-    const tr = plan.trailer;
-    onAddClips([{ title: tr.label || 'Trailer', start_time: tr.start_time, end_time: tr.end_time }]);
-  }, [plan, onAddClips]);
+  }, [duration, partSeconds, videoUrl, onAddClips, t.planFailed]);
 
   const addAllParts = useCallback(() => {
     if (!plan?.parts?.length) return;
@@ -253,16 +255,6 @@ export default function FilmToolsPanel({
           />
         </label>
 
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={includeTrailer}
-            onChange={(e) => setIncludeTrailer(e.target.checked)}
-            style={{ accentColor: 'var(--primary)', width: '15px', height: '15px', cursor: 'pointer' }}
-          />
-          {t.trailerToggle}
-        </label>
-
         <button
           type="button"
           onClick={generatePlan}
@@ -296,20 +288,6 @@ export default function FilmToolsPanel({
             <span className="group-badge" style={{ fontWeight: 600 }}>
               {t.planSummary(plan.part_count, totalMinutes)}
             </span>
-            {plan.trailer && (
-              <button
-                type="button"
-                onClick={addTrailer}
-                style={{
-                  padding: '0.4rem 0.85rem', borderRadius: '8px',
-                  border: '1px solid rgba(245, 158, 11, 0.45)',
-                  background: 'rgba(245, 158, 11, 0.14)', color: '#fcd34d',
-                  fontWeight: 700, fontSize: '0.76rem', cursor: 'pointer',
-                }}
-              >
-                🎬 {t.addTrailer}
-              </button>
-            )}
             {plan.parts.length > 0 && (
               <button
                 type="button"

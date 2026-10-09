@@ -597,6 +597,47 @@ def _pick_broadcast_file(out_dir: Path, token: str) -> Optional[Path]:
     return None
 
 
+def _has_audible_audio(file_path: Union[str, Path], threshold_db: float = -50.0) -> bool:
+    """
+    Returns True only when the file contains an audio stream whose mean volume is
+    above ``threshold_db`` (i.e. it is not silent).
+
+    Why this exists: the live DVR stream-copy (Path A of
+    ``capture_youtube_live_media``) can produce a container that passes
+    ``is_valid_mp4`` yet carries a *silent* audio track — e.g. when the resolved
+    HLS variant has no audio packets for the requested DVR window. If such a file
+    were accepted, offline Whisper would transcribe nothing and the broadcast
+    would dead-end with "no subtitles". Treating it as a failure lets the caller
+    fall through to the yt-dlp download path, which yields real audio.
+    """
+    p = Path(file_path)
+    # 1) There must actually be an audio stream.
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=index", "-of", "csv=p=0", str(p)],
+            capture_output=True, text=True, timeout=15,
+        )
+        if not (probe.stdout or "").strip():
+            return False
+    except Exception:  # noqa: BLE001
+        # If ffprobe is unavailable we cannot tell — don't block a good file.
+        return True
+    # 2) That audio stream must not be silent.
+    try:
+        res = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-i", str(p),
+             "-af", "volumedetect", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=120,
+        )
+        m = re.search(r"mean_volume:\s*(-?\d+(?:\.\d+)?)\s*dB", res.stderr or "")
+        if not m:
+            return False
+        return float(m.group(1)) > threshold_db
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def capture_youtube_live_media(
     video_url: str,
     output_dir: Union[str, Path],
@@ -676,8 +717,20 @@ def capture_youtube_live_media(
             notify(f"Capturing the last ~{max_seconds // 60} min of the live stream...", 40)
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec)
             if out_path.exists() and is_valid_mp4(out_path) and out_path.stat().st_size > 0:
-                logger.info(f"Live media captured: {out_path} ({out_path.stat().st_size} bytes)")
-                return str(out_path)
+                if _has_audible_audio(out_path):
+                    logger.info(f"Live media captured: {out_path} ({out_path.stat().st_size} bytes)")
+                    return str(out_path)
+                # Valid container but silent audio (e.g. the DVR window carried no
+                # audio packets). Discard it so the yt-dlp download path runs and
+                # Whisper gets real audio instead of transcribing silence.
+                logger.warning(
+                    "Live DVR capture produced a silent audio track; "
+                    "discarding it and falling back to the download path."
+                )
+                try:
+                    out_path.unlink()
+                except Exception:  # noqa: BLE001
+                    pass
             logger.warning(
                 f"Live DVR capture failed (rc={res.returncode}): {(res.stderr or '')[:250]}"
             )
