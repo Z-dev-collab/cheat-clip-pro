@@ -83,6 +83,8 @@ class AnalyzeResponse(BaseModel):
     video_url: Optional[str] = None
     source_type: Optional[str] = "youtube"
     audio_review: Optional[AudioReview] = None
+    detected_language: Optional[str] = None
+    detected_language_name: Optional[str] = None
 
 
 class TranslateRequest(BaseModel):

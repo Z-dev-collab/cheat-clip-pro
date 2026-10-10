@@ -51,6 +51,8 @@ export interface AnalyzeResponse {
   video_url?: string;
   source_type?: 'youtube' | 'upload' | 'gdrive' | 'site';
   audio_review?: AudioReview;
+  detected_language?: string;
+  detected_language_name?: string;
 }
 
 export type AspectRatioOption = '9:16' | '1:1' | '4:3' | '16:9' | '16:9_landscape';

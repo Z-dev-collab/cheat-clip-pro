@@ -231,6 +231,7 @@ export const en = {
     aiModelBadge: "AI Model:",
     generatedClipsBadge: "Generated Clips:",
     markedClipsBadge: "Marked Clips:",
+    detectedLanguageBadge: "Detected Language:",
     searchPlaceholder: "🔍 Search clips or transcripts...",
     filterAllScores: "🔥 All Scores",
     filterHigh: "🚀 High (90%+)",

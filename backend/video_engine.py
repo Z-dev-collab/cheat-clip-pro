@@ -185,6 +185,7 @@ class _FasterWhisperAdapter:
         def _collect(use_vad: bool):
             seg_iter, info = self._model.transcribe(
                 audio_input,
+                language=language,
                 word_timestamps=bool(word_timestamps),
                 initial_prompt=initial_prompt,
                 vad_filter=use_vad,
@@ -214,7 +215,16 @@ class _FasterWhisperAdapter:
             # sound effects mask the voice — very common on TikTok clips.
             # Retry once without VAD so we still capture any speech present.
             segments, info = _collect(False)
-        return {"segments": segments, "language": getattr(info, "language", "")}
+        lang_prob = 0.0
+        try:
+            lang_prob = float(getattr(info, "language_probability", 0.0) or 0.0)
+        except Exception:
+            lang_prob = 0.0
+        return {
+            "segments": segments,
+            "language": getattr(info, "language", "") or "",
+            "language_probability": lang_prob,
+        }
 
 
 def get_whisper_model():
@@ -992,11 +1002,26 @@ def compute_audio_energy_heatmap(file_path: Union[str, Path], duration: float, n
     return heatmap
 
 
-def transcribe_local_video_file(file_path: Union[str, Path], progress_callback=None) -> List[Dict[str, Any]]:
+def transcribe_local_video_file(
+    file_path: Union[str, Path],
+    progress_callback=None,
+    language_hint: Optional[str] = None,
+) -> Dict[str, Any]:
     """
-    Transcribes speech from a local video or audio file using OpenAI Whisper.
-    Returns standard transcript segments formatted as:
-    [{"text": "...", "start": 0.0, "duration": 3.5}, ...]
+    Transcribes speech from a local video or audio file using Whisper.
+
+    Returns a dict:
+      {
+        "lines":  [{"text": "...", "start": 0.0, "duration": 3.5}, ...],
+        "language": "<iso code Whisper detected>",
+        "language_probability": <float 0-1>,
+      }
+
+    `language_hint` forces/steers Whisper's decoding to a specific language when
+    the caller already knows it (e.g. from the caption track), which improves
+    accuracy for languages the model would otherwise guess wrong.
+
+    Backwards compatible: callers that expect a plain list can read `result["lines"]`.
     """
     p = Path(file_path)
     if not p.exists():
@@ -1013,18 +1038,31 @@ def transcribe_local_video_file(file_path: Union[str, Path], progress_callback=N
         progress_callback("Running Whisper AI", f"Extracting dialogue from {p.name} with Whisper...", 30)
 
     logger.info(f"Transcribing local file with Whisper: {p}")
-    whisper_prompt = "Transkrip video percakapan dalam Bahasa Indonesia atau English."
-    result = whisper_model.transcribe(
-        str(p),
+
+    # A generic initial_prompt biases the model toward the language it is written
+    # in. Only nudge when we do NOT already know the language — otherwise pass a
+    # neutral, language-agnostic prompt so Whisper can detect and keep the true
+    # spoken language (important for non-Indonesian/English videos).
+    neutral_prompt = "Transcribe the spoken audio accurately in its original language."
+    if language_hint:
+        whisper_prompt = None
+    else:
+        whisper_prompt = neutral_prompt
+
+    transcribe_kwargs = dict(
         word_timestamps=True,
         fp16=False,
         verbose=False,
-        initial_prompt=whisper_prompt
+        initial_prompt=whisper_prompt,
     )
-    
+    if language_hint:
+        transcribe_kwargs["language"] = str(language_hint).strip().lower().split('-')[0]
+
+    result = whisper_model.transcribe(str(p), **transcribe_kwargs)
+
     segments = result.get("segments", [])
     transcript_lines = []
-    
+
     for seg in segments:
         text = seg.get("text", "").strip()
         if not text:
@@ -1037,9 +1075,27 @@ def transcribe_local_video_file(file_path: Union[str, Path], progress_callback=N
             "start": start,
             "duration": dur
         })
-        
-    logger.info(f"Whisper transcribed {len(transcript_lines)} dialogue segments from {p.name}")
-    return transcript_lines
+
+    detected_language = ""
+    try:
+        detected_language = (result.get("language") or "").strip()
+    except Exception:
+        detected_language = ""
+    lang_prob = 0.0
+    try:
+        lang_prob = float(result.get("language_probability") or 0.0)
+    except Exception:
+        lang_prob = 0.0
+
+    logger.info(
+        f"Whisper transcribed {len(transcript_lines)} dialogue segments from {p.name} "
+        f"(detected language: {detected_language or 'unknown'})"
+    )
+    return {
+        "lines": transcript_lines,
+        "language": detected_language,
+        "language_probability": lang_prob,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1714,7 +1770,9 @@ def transcribe_clip_words(
     if whisper_model is not None:
         try:
             logger.info("Running Whisper word-level transcription as fallback...")
-            whisper_prompt = "Transkrip video percakapan dalam Bahasa Indonesia atau English."
+            # Neutral prompt: do not bias the model toward Indonesian/English so
+            # non-English/Indonesian clips keep their true spoken language.
+            whisper_prompt = "Transcribe the spoken audio accurately in its original language."
             result = whisper_model.transcribe(
                 video_path,
                 word_timestamps=True,

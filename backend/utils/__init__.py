@@ -6,6 +6,7 @@ from backend.utils.text import (
     lowercase_hashtags_in_string,
     detect_transcript_language,
     sanitize_first_person_title,
+    language_display_name,
     LANGUAGE_NAMES,
 )
 from backend.utils.heatmap import get_average_heatmap_value
@@ -24,6 +25,7 @@ __all__ = [
     "lowercase_hashtags_in_string",
     "detect_transcript_language",
     "sanitize_first_person_title",
+    "language_display_name",
     "LANGUAGE_NAMES",
     "get_average_heatmap_value",
     "TimeoutSession",

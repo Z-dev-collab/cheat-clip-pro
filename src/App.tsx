@@ -2305,7 +2305,7 @@ Transcript:
         body: JSON.stringify({
           transcript: result.transcript.map(l => ({ start: l.start, end: l.end, text: l.text, engagement: l.engagement })),
           target_language: targetLang,
-          source_language: undefined,
+          source_language: result.detected_language || undefined,
           api_key: apiKey.trim() || undefined,
           model: selectedModel,
           provider: provider,
@@ -5082,6 +5082,15 @@ Transcript:
                     {result.clips.filter(clip => !!markedClips[`${clip.start_time}_${clip.end_time}`]).length}
                   </strong>
                 </div>
+                {result.detected_language_name && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <span style={{ fontSize: '1rem' }}>🌐</span>
+                    <span>{t.results.detectedLanguageBadge}</span>
+                    <strong style={{ color: 'var(--accent)', fontWeight: 600 }}>
+                      {result.detected_language_name}
+                    </strong>
+                  </div>
+                )}
               </div>
 
               {/* Search & Filter Controls */}

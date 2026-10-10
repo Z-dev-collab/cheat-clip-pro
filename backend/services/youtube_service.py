@@ -23,6 +23,29 @@ from backend.utils.proxy import (
     get_proxy_url,
     get_youtube_transcript_proxy_config,
 )
+
+# The language code of the caption track most recently fetched by
+# `fetch_transcript`. Caption tracks carry an authoritative language tag, so the
+# analyze flow reads this to seed language detection (more accurate than text
+# heuristics, especially for non-English/Indonesian videos).
+LAST_TRANSCRIPT_LANGUAGE: Optional[str] = None
+
+
+def get_last_transcript_language() -> Optional[str]:
+    return LAST_TRANSCRIPT_LANGUAGE
+
+
+def reset_last_transcript_language() -> None:
+    global LAST_TRANSCRIPT_LANGUAGE
+    LAST_TRANSCRIPT_LANGUAGE = None
+
+
+def _set_last_transcript_language(code: Optional[str]) -> None:
+    global LAST_TRANSCRIPT_LANGUAGE
+    if code:
+        LAST_TRANSCRIPT_LANGUAGE = str(code).strip().lower().split('-')[0]
+
+
 from backend.utils.text import extract_video_id
 
 
@@ -248,7 +271,8 @@ def fetch_video_metadata(url: str, custom_proxy: Optional[str] = None):
                     "duration": float(info.get('duration') or 0.0),
                     "heatmap": info.get('heatmap') or [],
                     "is_live": bool(info.get('is_live') or False),
-                    "live_status": info.get('live_status') or 'not_live'
+                    "live_status": info.get('live_status') or 'not_live',
+                    "language": (info.get('language') or info.get('audio_language') or '') or '',
                 }
         except Exception as e:
             logger.warning(f"yt-dlp metadata extraction failed (proxy={'yes' if attempt_proxy else 'no'}): {e}")
@@ -525,6 +549,7 @@ def fetch_transcript_ytdlp(video_id: str, proxy: Optional[str] = None) -> List[d
                                             result.append({'text': text, 'start': start, 'duration': dur})
                                     if result:
                                         logger.info(f"Transcript fetched via yt-dlp (lang={lang}, auto={is_auto}, proxy={'yes' if p else 'no'})")
+                                        _set_last_transcript_language(lang)
                                         return result
                             except Exception:
                                 continue
@@ -595,6 +620,7 @@ def fetch_transcript(
                         if res:
                             _shared_cookie_jar.update(client.cookies)
                             logger.info(f"[Tier 2] Transcript fetched via proxy Python API ({t.language_code} - {t.language}): {len(res)} lines")
+                            _set_last_transcript_language(getattr(t, "language_code", None))
                             return res
                     except Exception:
                         continue
@@ -659,6 +685,7 @@ def fetch_transcript(
                     if res:
                         _shared_cookie_jar.update(direct_client.cookies)
                         logger.info(f"[Tier 5] Transcript fetched via direct list ({transcript.language_code} - {transcript.language}): {len(res)} lines")
+                        _set_last_transcript_language(getattr(transcript, "language_code", None))
                         return res
                 except Exception:
                     continue

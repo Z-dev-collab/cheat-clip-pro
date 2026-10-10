@@ -233,6 +233,7 @@ export const id: Translations = {
     aiModelBadge: "Model AI:",
     generatedClipsBadge: "Klip Dihasilkan:",
     markedClipsBadge: "Klip Ditandai:",
+    detectedLanguageBadge: "Bahasa Terdeteksi:",
     searchPlaceholder: "🔍 Cari klip atau transkrip...",
     filterAllScores: "🔥 Semua Skor",
     filterHigh: "🚀 Tinggi (90%+)",

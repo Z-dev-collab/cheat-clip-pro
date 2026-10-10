@@ -57,6 +57,8 @@ from backend.services.youtube_service import (
     fetch_video_metadata,
     get_supadata_keys,
     get_supadata_usage_data,
+    get_last_transcript_language,
+    reset_last_transcript_language,
 )
 from backend.utils.heatmap import get_average_heatmap_value
 from backend.utils.audio_beats import review_background_audio
@@ -314,6 +316,17 @@ async def analyze_video(request: AnalyzeRequest):
 
         gemini_key = (request.api_key or os.environ.get("GEMINI_API_KEY") or '').strip()
         is_mock = gemini_key.lower() == "mock"
+
+        # Language signals gathered while building the transcript. A real ASR
+        # (Whisper) or the caption/audio track metadata gives a far more accurate
+        # language than text heuristics alone, so we carry it into detection and
+        # the translation prompt.
+        asr_language_hint: Optional[str] = None
+        asr_language_confidence: float = 0.0
+        try:
+            reset_last_transcript_language()
+        except Exception:
+            pass
 
         if is_openai_provider:
             # OpenAI-compatible providers (9router, OpenRouter, LM Studio, ...) may
@@ -579,6 +592,13 @@ async def analyze_video(request: AnalyzeRequest):
                         yield _sse(progress_queue.get_nowait())
 
                     transcript_lines = await task
+                    if isinstance(transcript_lines, dict):
+                        asr_language_hint = (transcript_lines.get("language") or "").strip() or asr_language_hint
+                        try:
+                            asr_language_confidence = float(transcript_lines.get("language_probability") or asr_language_confidence or 0.0)
+                        except Exception:
+                            pass
+                        transcript_lines = transcript_lines.get("lines", []) or []
                     if not transcript_lines:
                         if is_mock:
                             transcript_lines = [
@@ -675,6 +695,8 @@ async def analyze_video(request: AnalyzeRequest):
                 heatmap  = metadata.get("heatmap") or []
                 is_live  = metadata.get("is_live", False)
                 live_status = metadata.get("live_status", "not_live")
+                if metadata.get("language"):
+                    asr_language_hint = str(metadata["language"]).strip().lower().split('-')[0]
                 yield _sse({
                     "step": 1,
                     "step_progress": 100,
@@ -898,6 +920,13 @@ async def analyze_video(request: AnalyzeRequest):
                             while not progress_queue.empty():
                                 yield _sse(progress_queue.get_nowait())
                             transcript_lines = await task2
+                            if isinstance(transcript_lines, dict):
+                                asr_language_hint = (transcript_lines.get("language") or "").strip() or asr_language_hint
+                                try:
+                                    asr_language_confidence = float(transcript_lines.get("language_probability") or asr_language_confidence or 0.0)
+                                except Exception:
+                                    pass
+                                transcript_lines = transcript_lines.get("lines", []) or []
                         except Exception as whisper_exc:  # noqa: BLE001
                             yield _sse({
                                 "error": f"Offline Whisper transcription of the broadcast failed: {whisper_exc}",
@@ -1123,7 +1152,9 @@ async def analyze_video(request: AnalyzeRequest):
                 heatmap=mock_heatmap,
                 summary="Mock analysis: this video explains how CHEAT CLIP PRO works. #aitools #videoediting #productivity",
                 clips=mock_clips,
-                model="Mock Gemini"
+                model="Mock Gemini",
+                detected_language="en",
+                detected_language_name="English",
             )
             yield _sse({
                 "step": 4,
@@ -1178,10 +1209,23 @@ async def analyze_video(request: AnalyzeRequest):
             )
 
         # ── Step 4: Build prompt & Detect Language ─────────────────────────────
-        detected_lang = detect_transcript_language(enriched_transcript, title)
+        # Prefer the caption-track language (it matches the transcript text),
+        # then a Whisper/metadata hint, then text heuristics.
+        caption_track_lang = None
+        try:
+            caption_track_lang = get_last_transcript_language()
+        except Exception:
+            caption_track_lang = None
+        detection_hint = caption_track_lang or asr_language_hint
+        detection_hint_conf = asr_language_confidence if (asr_language_hint and not caption_track_lang) else 0.0
+        detected_lang = detect_transcript_language(
+            enriched_transcript, title,
+            hint=detection_hint,
+            hint_confidence=detection_hint_conf,
+        )
         lang_code = detected_lang.get('code', 'en')
         lang_name = detected_lang.get('name', 'English')
-        logger.info(f"Detected video language: {lang_name} ({lang_code}) - confidence {detected_lang.get('confidence', 0.0)}")
+        logger.info(f"Detected video language: {lang_name} ({lang_code}) - confidence {detected_lang.get('confidence', 0.0)} (hint={detection_hint})")
 
         # Optional user-requested output language for clip titles/summary/captions.
         # 'auto' (or empty) keeps the video's own detected language (zero-translation).
@@ -1921,7 +1965,9 @@ async def analyze_video(request: AnalyzeRequest):
             model=successful_model or requested_model,
             video_url=video_url,
             source_type=source_type,
-            audio_review=audio_review
+            audio_review=audio_review,
+            detected_language=lang_code,
+            detected_language_name=lang_name,
         )
 
         yield _sse({"done": True, "result": final_result.model_dump()})
