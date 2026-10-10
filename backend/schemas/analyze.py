@@ -44,6 +44,7 @@ class AnalyzeRequest(BaseModel):
     proxy: Optional[str] = Field(None, description="Optional custom proxy URL")
     transcript_language: Optional[str] = Field(None, description="Language code (or 'auto') to translate the transcript into, e.g. 'id', 'en', 'ja'. 'auto' keeps the original language.")
     title_language: Optional[str] = Field(None, description="Language code (or 'auto') the clip titles / summary should be written in, e.g. 'id', 'en', 'ja'. 'auto' keeps the video's own language.")
+    content_type: Optional[str] = Field(None, description="Optional content preset, e.g. 'gameplay' for gaming highlight detection (epic moments, min 1 minute clips, background-sound review).")
 
 class HeatmapPoint(BaseModel):
     start_time: float
@@ -55,6 +56,19 @@ class TranscriptLine(BaseModel):
     end: float
     text: str
     engagement: Optional[float] = None
+
+class AudioReviewPeak(BaseModel):
+    time: float
+    score: float
+
+class AudioReview(BaseModel):
+    ok: bool = False
+    duration: float = 0.0
+    peak_count: int = 0
+    loudness: float = 0.0
+    dynamics: float = 0.0
+    epic_peaks: List[AudioReviewPeak] = Field(default_factory=list)
+    summary: str = ""
 
 class AnalyzeResponse(BaseModel):
     video_id: str
@@ -68,6 +82,7 @@ class AnalyzeResponse(BaseModel):
     model: Optional[str] = None
     video_url: Optional[str] = None
     source_type: Optional[str] = "youtube"
+    audio_review: Optional[AudioReview] = None
 
 
 class TranslateRequest(BaseModel):

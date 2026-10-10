@@ -211,7 +211,11 @@ async def render_single_batch_clip(
             meme_overlays=(
                 [m.model_dump() for m in settings.meme_overlays]
                 if (settings.meme_enabled and settings.meme_overlays) else None
-            )
+            ),
+            beat_punch=bool(settings.beat_punch_enabled),
+            beat_intensity=float(settings.beat_intensity if settings.beat_intensity is not None else 0.16),
+            beat_shake=bool(settings.beat_shake if settings.beat_shake is not None else True),
+            beat_flash=bool(settings.beat_flash if settings.beat_flash is not None else True)
         )
 
         if not os.path.exists(out_path) or not is_valid_mp4(out_path):
@@ -551,7 +555,11 @@ async def render_merged_batch_clips(
             meme_overlays=(
                 [m.model_dump() for m in settings.meme_overlays]
                 if (settings.meme_enabled and settings.meme_overlays) else None
-            )
+            ),
+            beat_punch=bool(settings.beat_punch_enabled),
+            beat_intensity=float(settings.beat_intensity if settings.beat_intensity is not None else 0.16),
+            beat_shake=bool(settings.beat_shake if settings.beat_shake is not None else True),
+            beat_flash=bool(settings.beat_flash if settings.beat_flash is not None else True)
         )
 
         if not os.path.exists(out_path) or not is_valid_mp4(out_path):

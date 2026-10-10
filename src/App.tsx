@@ -75,6 +75,11 @@ export default function App() {
     if (saved === '15s' || saved === '30s' || saved === '60s' || saved === 'auto') return saved;
     return '30s';
   });
+  // Gameplay / gaming preset: when on, the backend reviews the background audio
+  // for epic moments and enforces >=60s clips. Persisted across sessions.
+  const [gameplayMode, setGameplayMode] = useState<boolean>(() => {
+    return localStorage.getItem('cheat_clip_gameplay_mode') === 'true';
+  });
   const [provider, setProvider] = useState<'gemini' | 'openai'>(() => {
     const saved = localStorage.getItem('cheat_clip_ai_provider');
     return saved === 'openai' ? 'openai' : 'gemini';
@@ -636,6 +641,11 @@ export default function App() {
             compilation_title: settings.compilationTitle || null,
             // Auto Cover / Thumbnail
             cover_enabled: settings.coverEnabled || false,
+            // Jedag Jedug (beat-punch) auto edit — auto-on in Gameplay Mode
+            beat_punch_enabled: gameplayMode || (settings.beatPunchEnabled || false),
+            beat_intensity: settings.beatIntensity !== undefined ? settings.beatIntensity : 0.16,
+            beat_shake: settings.beatShake !== undefined ? settings.beatShake : true,
+            beat_flash: settings.beatFlash !== undefined ? settings.beatFlash : true,
           },
           transcript: result.transcript,
         }),
@@ -1639,6 +1649,7 @@ export default function App() {
           target_clip_count: clipCountMode === 'auto' ? 'auto' : targetClipCount,
           transcript_language: transcriptLanguage !== 'auto' ? transcriptLanguage : undefined,
           title_language: titleLanguage !== 'auto' ? titleLanguage : undefined,
+          content_type: gameplayMode ? 'gameplay' : undefined,
         }),
       });
 
@@ -3609,6 +3620,45 @@ Transcript:
                     🎵 TikTok: durasi klip dikunci otomatis <b>30 detik – 1 menit</b>.
                   </span>
                 )}
+                <label
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.35rem',
+                    padding: '0.55rem 0.7rem', borderRadius: '10px', cursor: 'pointer',
+                    background: gameplayMode ? 'rgba(124, 58, 237, 0.12)' : 'var(--bg-elevated, rgba(255,255,255,0.03))',
+                    border: gameplayMode ? '1px solid rgba(124, 58, 237, 0.55)' : '1px solid var(--border, rgba(255,255,255,0.08))',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={gameplayMode}
+                    disabled={loading}
+                    onChange={(e) => {
+                      const on = e.target.checked;
+                      setGameplayMode(on);
+                      localStorage.setItem('cheat_clip_gameplay_mode', String(on));
+                      if (on) {
+                        // Gameplay clips must be >= 1 minute: lock duration to 60s.
+                        setDurationPref('60s');
+                        localStorage.setItem('cheat_clip_duration_pref', '60s');
+                      }
+                    }}
+                    style={{ width: '16px', height: '16px', accentColor: '#7c3aed' }}
+                  />
+                  <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.25 }}>
+                    <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      🎮 {t.form.gameplayMode}
+                    </span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      {t.form.gameplayModeTip}
+                    </span>
+                  </span>
+                </label>
+                {gameplayMode && (
+                  <span style={{ fontSize: '0.72rem', color: '#a78bfa', lineHeight: 1.3 }}>
+                    🔥 {t.form.gameplayModeActive}
+                  </span>
+                )}
               </div>
 
               {/* Focus Prompt Search Keyword */}
@@ -4752,6 +4802,49 @@ Transcript:
                       {rawDownloadProgress.downloaded || t.rawDownload.connecting} {rawDownloadProgress.total ? `/ ${rawDownloadProgress.total}` : ''}
                     </span>
                     <span>{rawDownloadProgress.speed || ''}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Background-audio review card (Gameplay Mode) */}
+              {result.audio_review && result.audio_review.ok && (
+                <div
+                  className="glass-panel"
+                  style={{
+                    padding: '1rem 1.25rem',
+                    border: '1px solid rgba(124, 58, 237, 0.4)',
+                    background: 'linear-gradient(135deg, rgba(124,58,237,0.10) 0%, rgba(16,185,129,0.06) 100%)'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.6rem', flexWrap: 'wrap' }}>
+                    <h3 style={{ fontSize: '0.95rem', color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      🔊 {t.results.audioReviewTitle}
+                    </h3>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      {t.results.audioReviewPeaks.replace('{n}', String(result.audio_review.peak_count))}
+                    </span>
+                  </div>
+                  {result.audio_review.summary && (
+                    <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: '0.7rem' }}>
+                      {result.audio_review.summary}
+                    </p>
+                  )}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                    {result.audio_review.epic_peaks.slice(0, 12).map((pk, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => handleSeek(pk.time)}
+                        title={`${t.results.audioReviewJump} ${Math.floor(pk.time / 60)}:${String(Math.floor(pk.time % 60)).padStart(2, '0')}`}
+                        style={{
+                          fontSize: '0.72rem', fontWeight: 600, padding: '3px 8px', borderRadius: '6px',
+                          border: '1px solid rgba(167,139,250,0.5)', background: 'rgba(124,58,237,0.18)',
+                          color: '#ddd6fe', cursor: 'pointer'
+                        }}
+                      >
+                        🔥 {Math.floor(pk.time / 60)}:{String(Math.floor(pk.time % 60)).padStart(2, '0')}
+                      </button>
+                    ))}
                   </div>
                 </div>
               )}

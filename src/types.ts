@@ -24,6 +24,21 @@ export interface ViralClip {
   hashtag_suggestion?: string;
 }
 
+export interface AudioReviewPeak {
+  time: number;
+  score: number;
+}
+
+export interface AudioReview {
+  ok: boolean;
+  duration: number;
+  peak_count: number;
+  loudness: number;
+  dynamics: number;
+  epic_peaks: AudioReviewPeak[];
+  summary: string;
+}
+
 export interface AnalyzeResponse {
   video_id: string;
   title: string;
@@ -35,6 +50,7 @@ export interface AnalyzeResponse {
   model?: string;
   video_url?: string;
   source_type?: 'youtube' | 'upload' | 'gdrive' | 'site';
+  audio_review?: AudioReview;
 }
 
 export type AspectRatioOption = '9:16' | '1:1' | '4:3' | '16:9' | '16:9_landscape';
@@ -172,6 +188,11 @@ export interface RenderSettings {
   compilationTitle?: string;
   // Auto Cover / Thumbnail
   coverEnabled?: boolean;
+  // Jedag Jedug (beat-punch) auto edit
+  beatPunchEnabled?: boolean;
+  beatIntensity?: number;
+  beatShake?: boolean;
+  beatFlash?: boolean;
 }
 
 export interface RenderClipStatus {

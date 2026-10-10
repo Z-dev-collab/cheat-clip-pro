@@ -2941,11 +2941,23 @@ def build_ffmpeg_filtergraph(
     title_position: str = "auto",
     ass_subtitles_path: Optional[str] = None,
     face_box: Optional[Dict[str, Any]] = None,
-    title_y_percent: Optional[float] = None
+    title_y_percent: Optional[float] = None,
+    # "Jedag jedug" beat-synced punch (auto edit)
+    beat_punch: bool = False,
+    beat_bpm: float = 0.0,
+    beat_first: float = 0.0,
+    beat_intensity: float = 0.16,
+    beat_shake: bool = True,
+    beat_flash: bool = True,
+    source_fps: float = 30.0,
 ) -> Tuple[str, str]:
     """
     Constructs the FFmpeg -filter_complex chain with proper aspect ratio center-cropping.
     Canvas is always 1080x1920 (9:16).
+
+    When ``beat_punch`` is enabled the layout is rhythmically zoom-punched on every
+    beat ("jedag jedug") before subtitles/titles are burned, so the gameplay video
+    pulses while the text overlays stay perfectly still.
     """
     filters = []
 
@@ -3213,6 +3225,42 @@ def build_ffmpeg_filtergraph(
             )
         current_v = "[layout_base]"
 
+    # 1b. "Jedag jedug" beat-synced punch (auto edit) — applied to the layout
+    # BEFORE subtitles/titles so the gameplay pulses but the text stays still.
+    if beat_punch and float(beat_bpm) > 0:
+        try:
+            period = max(0.1, 60.0 / float(beat_bpm))
+            phase = max(0.0, float(beat_first))
+            k = 8.0
+            inten = max(0.02, min(0.5, float(beat_intensity)))
+            # Sharp spike (=1) exactly on each beat, ~0 in between.
+            env = f"pow(abs(cos(PI*(in_time-{phase:.4f})/{period:.5f})),{k:.0f})"
+            z = f"1+{inten:.4f}*{env}"
+            if beat_shake:
+                sh = inten * 70.0
+                x_expr = f"max(0,min(iw-iw/zoom,iw/2-(iw/zoom/2)+{sh:.2f}*{env}*sin(in_time*55)))"
+                y_expr = f"max(0,min(ih-ih/zoom,ih/2-(ih/zoom/2)+{sh * 0.7:.2f}*{env}*cos(in_time*63)))"
+            else:
+                x_expr = "iw/2-(iw/zoom/2)"
+                y_expr = "ih/2-(ih/zoom/2)"
+            canvas_w = 1920 if aspect_ratio == "16:9_landscape" else 1080
+            canvas_h = 1080 if aspect_ratio == "16:9_landscape" else 1920
+            fps = float(source_fps) if source_fps and float(source_fps) > 1 else 30.0
+            filters.append(
+                f"{current_v}zoompan=z='{z}':d=1:x='{x_expr}':y='{y_expr}':"
+                f"s={canvas_w}x{canvas_h}:fps={fps:.6g}[beat_punched]"
+            )
+            current_v = "[beat_punched]"
+            if beat_flash:
+                flash = max(0.0, min(0.25, inten * 0.9))
+                filters.append(
+                    f"{current_v}eq=brightness='{flash:.4f}*pow(abs(cos(PI*(t-{phase:.4f})/{period:.5f})),"
+                    f"{k * 1.4:.0f})':eval=frame[beat_flashed]"
+                )
+                current_v = "[beat_flashed]"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Beat punch filter skipped: {exc}")
+
     # 2. Subtitles & Title Burning via libass (.ass)
     # (If ass_subtitles_path is provided, it contains BOTH the title and subtitles rendered with exact matching fonts)
     if ass_subtitles_path and os.path.exists(ass_subtitles_path):
@@ -3361,7 +3409,12 @@ def render_clip_to_mp4(
     hardware_accel: Optional[str] = "auto",
     title_y_percent: Optional[float] = None,
     # Meme overlays (interactive editor): list of {type, text/image_path, x, y, size, start_time, end_time, ...}
-    meme_overlays: Optional[List[Dict[str, Any]]] = None
+    meme_overlays: Optional[List[Dict[str, Any]]] = None,
+    # "Jedag jedug" beat-synced auto edit (gameplay gaming)
+    beat_punch: bool = False,
+    beat_intensity: float = 0.16,
+    beat_shake: bool = True,
+    beat_flash: bool = True,
 ) -> str:
     """
     Renders the final 1080x1920 short-form video with layout, aspect ratio, titles, subtitles,
@@ -3395,6 +3448,32 @@ def render_clip_to_mp4(
             streamer_preset=streamer_preset
         )
 
+    # "Jedag jedug": detect the background-music tempo so the punch lands on the beat.
+    beat_bpm = 0.0
+    beat_first = 0.0
+    beat_detected = False
+    if beat_punch:
+        try:
+            from backend.utils.audio_beats import detect_beats
+            beats = detect_beats(video_path)
+            if beats.get("ok"):
+                beat_bpm = float(beats.get("bpm") or 0.0)
+                beat_first = float(beats.get("first_beat") or 0.0)
+                beat_detected = beat_bpm > 0
+                logger.info(
+                    f"Beat sync: {beat_bpm:.1f} BPM (confidence {beats.get('confidence')}), "
+                    f"first beat at {beat_first:.2f}s"
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Beat detection failed, using default tempo: {exc}")
+
+    source_fps = 30.0
+    try:
+        meta = get_video_file_metadata(video_path)
+        source_fps = float(meta.get("fps") or 30.0)
+    except Exception:  # noqa: BLE001
+        source_fps = 30.0
+
     filter_complex, out_video_map = build_ffmpeg_filtergraph(
         aspect_ratio=aspect_ratio,
         background_style=background_style,
@@ -3404,7 +3483,14 @@ def render_clip_to_mp4(
         title_position=title_position,
         ass_subtitles_path=ass_subtitles_path,
         face_box=face_box,
-        title_y_percent=title_y_percent
+        title_y_percent=title_y_percent,
+        beat_punch=bool(beat_punch),
+        beat_bpm=beat_bpm if beat_detected else 120.0,
+        beat_first=beat_first,
+        beat_intensity=float(beat_intensity),
+        beat_shake=bool(beat_shake),
+        beat_flash=bool(beat_flash),
+        source_fps=source_fps,
     )
 
     filter_chains = [filter_complex]

@@ -74,6 +74,11 @@ class RenderSettingsModel(BaseModel):
     compilation_title: Optional[str] = None
     # Auto Cover / Thumbnail
     cover_enabled: Optional[bool] = False
+    # "Jedag jedug" beat-synced auto edit (gameplay gaming)
+    beat_punch_enabled: Optional[bool] = False
+    beat_intensity: Optional[float] = 0.16
+    beat_shake: Optional[bool] = True
+    beat_flash: Optional[bool] = True
 
 class RenderBatchRequest(BaseModel):
     video_url: str

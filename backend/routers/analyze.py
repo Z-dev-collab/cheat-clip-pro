@@ -17,6 +17,7 @@ from backend.config import (
     UPLOADS_DIR,
     capture_youtube_live_media,
     compute_audio_energy_heatmap,
+    download_youtube_audio,
     get_video_file_metadata,
     logger,
     transcribe_local_video_file,
@@ -58,6 +59,7 @@ from backend.services.youtube_service import (
     get_supadata_usage_data,
 )
 from backend.utils.heatmap import get_average_heatmap_value
+from backend.utils.audio_beats import review_background_audio
 from backend.utils.languages import SUPPORTED_LANGUAGES, resolve_language_name
 from backend.utils.proxy import get_proxy_url
 from backend.utils.sse import _sse
@@ -978,6 +980,95 @@ async def analyze_video(request: AnalyzeRequest):
                 "engagement": round(score, 3)
             })
 
+        # ── Gameplay ("gaming") preset ───────────────────────────────────────
+        # When the caller flags the content as gameplay, review the background
+        # audio to surface the epic / high-energy moments (explosions,
+        # killstreaks, hype peaks) and fold those peaks into the engagement
+        # curve so the AI clip selection favours them.
+        is_gameplay = str(request.content_type or "").strip().lower() in ("gameplay", "gaming", "game")
+        audio_review: Optional[dict] = None
+        if is_gameplay:
+            gameplay_audio_path = None
+            if uploaded_file_path is not None:
+                gameplay_audio_path = str(uploaded_file_path)
+            elif video_url and str(video_url).startswith("/api/video/"):
+                vname = os.path.basename(str(video_url))
+                for base in (UPLOADS_DIR, TEMP_DIR):
+                    candidate = base / vname
+                    if candidate.exists():
+                        gameplay_audio_path = str(candidate)
+                        break
+            elif canonical_url and "youtube.com" in canonical_url:
+                # YouTube-with-captions path: no local file was captured, so pull
+                # just the audio track (bounded) to review the background sound.
+                yield _sse({
+                    "step": 2,
+                    "step_progress": 100,
+                    "overall_progress": 51,
+                    "stage": "Reviewing Background Audio",
+                    "detail": "Mengunduh audio untuk meninjau suara latar gameplay...",
+                    "message": "Meninjau suara latar gameplay (mengunduh audio)..."
+                })
+                try:
+                    gameplay_audio_path = await asyncio.to_thread(
+                        download_youtube_audio,
+                        canonical_url,
+                        TEMP_DIR,
+                        False,
+                        int(duration) if duration else 3600,
+                        1800,
+                        None,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"Gameplay audio download failed: {exc}")
+                    gameplay_audio_path = None
+
+            if gameplay_audio_path:
+                yield _sse({
+                    "step": 2,
+                    "step_progress": 100,
+                    "overall_progress": 52,
+                    "stage": "Reviewing Background Audio",
+                    "detail": "Menganalisis suara latar untuk menemukan momen epik (ledakan, killstreak, puncak hype)...",
+                    "message": "Meninjau suara latar gameplay untuk momen epik..."
+                })
+                try:
+                    audio_review = await asyncio.to_thread(
+                        review_background_audio, gameplay_audio_path, duration
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"Background audio review failed: {exc}")
+                    audio_review = None
+
+                # Fold the epic peaks into the engagement curve so the model
+                # ranks those windows higher than a plain loudness heatmap would.
+                if audio_review and audio_review.get("epic_peaks"):
+                    peaks = audio_review["epic_peaks"]
+                    for line in enriched_transcript:
+                        ls, le = line["start"], line["end"]
+                        boost = 0.0
+                        for pk in peaks:
+                            if ls - 2.0 <= pk["time"] <= le + 2.0:
+                                boost = max(boost, float(pk.get("score", 0.0)))
+                        if boost > 0.0:
+                            base = float(line.get("engagement", 0.0))
+                            # Blend: a strong epic peak always lifts a segment
+                            # into the high-interest band without discarding the
+                            # existing acoustic signal.
+                            line["engagement"] = round(min(1.0, 0.65 * boost + 0.35 * base), 3)
+                    if not heatmap:
+                        heatmap = [
+                            {
+                                "start_time": max(0.0, float(pk["time"]) - 2.0),
+                                "end_time": min(float(duration), float(pk["time"]) + 2.0),
+                                "value": float(pk.get("score", 0.0)),
+                            }
+                            for pk in peaks
+                        ]
+                    logger.info(
+                        f"Gameplay audio review: {len(peaks)} epic peaks folded into engagement curve."
+                    )
+
         # ── Mock short-circuit ───────────────────────────────────────────────
         if is_mock:
             mock_stages = [
@@ -1118,7 +1209,20 @@ async def analyze_video(request: AnalyzeRequest):
         is_tiktok_source = _netloc.endswith("tiktok.com") or ".tiktok.com" in _netloc
 
         is_auto_duration = str(request.duration).lower() == "auto"
-        if is_tiktok_source:
+        if is_gameplay:
+            # Gameplay / gaming highlights: user requirement — every clip must
+            # be at least 1 minute (60s) long, built around epic moments.
+            dur_range = "60s atau lebih (minimal 1 menit)"
+            duration_instruction = (
+                "GAMEPLAY CLIP DURATION RULE (STRICT — HIGHEST PRIORITY, OVERRIDES ALL OTHER DURATION SETTINGS):\n"
+                "- This is a GAMEPLAY / GAMING video. EVERY clip MUST be AT LEAST 60 seconds (1 minute) long.\n"
+                "- Absolute minimum: 60 seconds. NEVER produce a clip shorter than 60s.\n"
+                "- Prefer 60–90 seconds so the full epic sequence (buildup → fight/action → payoff) fits in one clip.\n"
+                "- Center each clip on the epic moments (killstreaks, clutches, explosions, hype peaks) surfaced by the background-audio review and engagement curve.\n"
+                "- Always begin and end at clean boundaries; never cut mid-action in a way that ruins the moment.\n"
+                "- Double-check each clip's (end - start) is >= 60 before returning it."
+            )
+        elif is_tiktok_source:
             dur_range = "30-60s"
             duration_instruction = (
                 "TikTok CLIP DURATION RULE (STRICT — HIGHEST PRIORITY, OVERRIDES ALL OTHER DURATION SETTINGS):\n"
@@ -1641,6 +1745,38 @@ async def analyze_video(request: AnalyzeRequest):
                         best_end = l_end
                 end = best_end
 
+            # ── Gameplay: HARD-enforce a 60s (1 minute) minimum window ──────
+            if is_gameplay:
+                # 1) Trim overly long clips back to the nearest sentence end <= 90s
+                if (end - start) > 90.0:
+                    max_end = start + 90.0
+                    best_end = max_end
+                    for l in enriched_transcript:
+                        l_end = l.get('end', 0.0)
+                        if start + 60.0 <= l_end <= max_end:
+                            best_end = l_end
+                    end = best_end
+                # 2) Extend clips shorter than 60s forward to the next sentence end reaching >= 60s
+                if (end - start) < 60.0:
+                    min_end = start + 60.0
+                    best_end = min_end
+                    for l in enriched_transcript:
+                        l_end = l.get('end', 0.0)
+                        if min_end <= l_end <= start + 90.0:
+                            best_end = l_end
+                            break
+                    end = best_end
+                # 3) Clamp to video bounds, then re-widen from the end if needed
+                if end > duration:
+                    end = duration
+                if (end - start) < 60.0 and (end - 60.0) >= 0.0:
+                    start = end - 60.0
+                # 4) Final safety clamp so the window never exceeds 90s
+                if (end - start) > 90.0:
+                    end = start + 90.0
+                if start < 0.0:
+                    start = 0.0
+
             # ── TikTok source: HARD-enforce 30s–60s clip window ──────────────
             if is_tiktok_source:
                 # 1) Trim clips longer than 60s back to the nearest sentence end <= 60s (but >= 30s)
@@ -1672,6 +1808,10 @@ async def analyze_video(request: AnalyzeRequest):
                     end = start + 60.0
                 if start < 0.0:
                     start = 0.0
+
+            # Keep the hook inside the (possibly re-widened) clip window.
+            if hook is None or not (start <= hook <= end):
+                hook = start
 
             clip_lines = [
                 line.get("text", "")
@@ -1780,7 +1920,8 @@ async def analyze_video(request: AnalyzeRequest):
             transcript=response_transcript,
             model=successful_model or requested_model,
             video_url=video_url,
-            source_type=source_type
+            source_type=source_type,
+            audio_review=audio_review
         )
 
         yield _sse({"done": True, "result": final_result.model_dump()})
