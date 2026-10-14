@@ -51,6 +51,50 @@ function getSanitizedEnv(pythonExe) {
   };
 }
 
+/**
+ * Reclaim port 8000 from a stale/zombie backend before launching.
+ * If an old uvicorn is still bound to :8000 it would keep serving OUTDATED
+ * code, so new requests can silently hit the wrong process (e.g. render
+ * failing with "Failed to download video clip segment" even after a fix).
+ * We kill the holder so only ONE backend, running current code, ever listens.
+ */
+function reclaimPort8000() {
+  try {
+    const find = isWindows
+      ? spawnSync('netstat', ['-ano'], { encoding: 'utf8' })
+      : spawnSync('sh', ['-c', "ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null"], { encoding: 'utf8' });
+    const out = (find.stdout || '') + (find.stderr || '');
+    const pids = new Set();
+    const lines = out.split(RegExp('[' + String.fromCharCode(10, 13) + ']'));
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line.includes(':8000') || !/LISTEN/i.test(line)) continue;
+      if (isWindows) {
+        const m = line.trim().split(/\s+/);
+        const pid = m[m.length - 1];
+        if (/^\d+$/.test(pid)) pids.add(pid);
+      } else {
+        const m = line.match(/pid=(\d+)/);
+        if (m) pids.add(m[1]);
+      }
+    }
+    if (pids.size === 0) return;
+    console.log('\x1b[33m%s\x1b[0m', `♻️  Port 8000 is busy (stale backend: ${[...pids].join(', ')}). Reclaiming...`);
+    for (const pid of pids) {
+      if (isWindows) {
+        spawnSync('taskkill', ['/F', '/T', '/PID', pid], { encoding: 'utf8' });
+      } else {
+        try { process.kill(Number(pid), 'SIGKILL'); } catch (_) { /* ignore */ }
+      }
+    }
+    // Give the OS a moment to release the socket.
+    const until = Date.now() + 3000;
+    while (Date.now() < until) { /* brief spin to let the port free up */ }
+  } catch (_) {
+    // Best-effort: never block startup on the preflight itself.
+  }
+}
+
 function findPythonCandidates() {
   const candidates = [];
 
@@ -199,6 +243,10 @@ function installDependencies(candidate) {
 
 async function start() {
   console.log('\x1b[36m%s\x1b[0m', '⚡ [Cheat Clip Pro] Initializing Fast & Resilient Python Backend Server...');
+
+  // Free :8000 from any stale backend first, so the server we launch is the
+  // ONLY one serving requests (prevents silently hitting outdated code).
+  reclaimPort8000();
 
   const candidates = findPythonCandidates();
   let selectedCandidate = null;

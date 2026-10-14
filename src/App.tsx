@@ -4192,7 +4192,7 @@ Transcript:
                         {/* Thumbnail with overlay duration badge */}
                         <div style={{ position: 'relative', flexShrink: 0 }}>
                           <img
-                            src={entry.thumbnail}
+                            src={entry.thumbnail || undefined}
                             alt=""
                             onError={(e) => {
                               (e.target as HTMLImageElement).src = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="84" height="48" viewBox="0 0 84 48"><rect width="84" height="48" fill="%231e1e2d"/><polygon points="36,18 52,24 36,30" fill="%236366f1"/></svg>';

@@ -165,9 +165,19 @@ def fetch_transcript_cli(
     logger.info(f"Executing CLI transcript extraction for {video_id}...")
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        if proc.returncode == 0 and proc.stdout.strip():
-            raw = json.loads(proc.stdout)
-            items = raw[0] if isinstance(raw, list) and len(raw) > 0 and isinstance(raw[0], list) else raw
+        # NOTE: the youtube_transcript_api CLI exits 0 even when it cannot find a
+        # transcript (it prints a human-readable message to stdout instead of
+        # JSON). So we must validate the stdout actually contains parseable JSON
+        # rather than trusting the return code.
+        stdout = (proc.stdout or "").strip()
+        parsed = None
+        if stdout:
+            try:
+                parsed = json.loads(stdout)
+            except (ValueError, TypeError):
+                parsed = None
+        if proc.returncode == 0 and parsed is not None:
+            items = parsed[0] if isinstance(parsed, list) and len(parsed) > 0 and isinstance(parsed[0], list) else parsed
             result = normalize_transcript(items)
             if result:
                 logger.info(f"Transcript fetched via CLI fallback: {len(result)} lines")
@@ -638,7 +648,7 @@ def fetch_transcript(
         try:
             cli_data = fetch_transcript_cli(
                 video_id,
-                priority_langs=None,
+                priority_langs=priority_langs,
                 proxy_url=proxy_url,
                 custom_proxy=custom_proxy,
                 timeout=20
@@ -701,7 +711,7 @@ def fetch_transcript(
     # ── Tier 6: Direct YouTubeTranscriptApi CLI Subprocess ────────────────────
     notify("Tier 6/7: Direct CLI Subprocess", "Trying Method 6/7: Direct isolated CLI subprocess...", 88)
     try:
-        direct_cli_data = fetch_transcript_cli(video_id, priority_langs=None, proxy_url=None, timeout=15)
+        direct_cli_data = fetch_transcript_cli(video_id, priority_langs=priority_langs, proxy_url=None, timeout=15)
         if direct_cli_data:
             logger.info(f"[Tier 6] Transcript fetched via direct CLI subprocess: {len(direct_cli_data)} lines")
             return direct_cli_data

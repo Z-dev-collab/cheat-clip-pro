@@ -426,7 +426,9 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
   const loadCustomFontFace = (name: string, url: string) => {
     try {
-      const font = new FontFace(name, `url(${url})`);
+      // Wrap in quotes and encode so filenames containing spaces or special
+      // characters (e.g. "Bebas Neue.ttf") produce a valid CSS url() value.
+      const font = new FontFace(name, `url("${encodeURI(url)}")`);
       font.load().then(loaded => {
         (document.fonts as Set<FontFace>).add(loaded);
       }).catch(err => console.warn(`Font '${name}' load error:`, err));
@@ -3778,7 +3780,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
                   return (
                     <div
-                      key={clipKey}
+                      key={`${clipKey}-${i}`}
                       className={`batch-title-card-item ${isCurrentActivePreview ? 'active-preview-border' : ''} ${isChecked ? '' : 'is-unchecked'}`}
                     >
                       <div className="batch-title-card-header">
@@ -4471,7 +4473,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             {/* Hidden Audio element for background music preview */}
             <audio
               ref={bgmAudioRef}
-              src={bgmAudioUrl}
+              src={bgmAudioUrl || undefined}
               onEnded={() => setIsBgmPlaying(false)}
               onLoadedMetadata={handleBgmLoadedMetadata}
               style={{ display: 'none' }}
@@ -4480,7 +4482,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             {/* Hidden Audio element for hook sound effect preview */}
             <audio
               ref={hookSfxAudioRef}
-              src={hookSfxAudioUrl}
+              src={hookSfxAudioUrl || undefined}
               onEnded={() => setIsHookSfxPlaying(false)}
               style={{ display: 'none' }}
             />

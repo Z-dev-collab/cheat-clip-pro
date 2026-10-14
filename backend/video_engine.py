@@ -402,6 +402,15 @@ def get_yt_dlp_base_cmd(include_cookies: bool = True, force_ipv4: bool = True) -
     elif shutil.which("node"):
         cmd.extend(["--js-runtimes", "node"])
 
+    # Modern YouTube serves a JS challenge (the "n"/signature parameter). yt-dlp
+    # needs BOTH a JS runtime AND the EJS challenge-solver component to solve it.
+    # Without the solver, format URLs are missing/empty and YouTube answers with
+    # "Sign in to confirm you're not a bot", which surfaced to users as
+    # "Failed to download video clip segment" for every fallback method. Fetching
+    # the solver from the official GitHub release is what yt-dlp recommends.
+    if shutil.which("deno") or shutil.which("node"):
+        cmd.extend(["--remote-components", "ejs:github"])
+
     # Prevent 'The page needs to be reloaded. Please try again later.'
     # by allowing yt-dlp to fall back from default/tv_downgraded to web_embedded and ios client APIs.
     cmd.extend([

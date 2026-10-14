@@ -5,6 +5,7 @@ import re
 import uuid
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
@@ -517,7 +518,7 @@ async def upload_font(file: UploadFile = File(...)):
             "success": True,
             "font_name": font_family,
             "filename": saved_filename,
-            "url": f"/api/font-file/{saved_filename}",
+            "url": f"/api/font-file/{quote(saved_filename)}",
             "size_bytes": bytes_written
         }
     except HTTPException:
@@ -579,7 +580,7 @@ def list_available_fonts():
                 "name": font_family,
                 "is_custom": not is_builtin,
                 "filename": f.name,
-                "url": f"/api/font-file/{f.name}"
+                "url": f"/api/font-file/{quote(f.name)}"
             }
 
     return {"success": True, "fonts": list(fonts_map.values())}
